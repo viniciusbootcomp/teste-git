@@ -1,37 +1,64 @@
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 export default async function Home() {
   const { data: produtos, error } = await supabase
-    .from("produto_teste")
-    .select("id, nome, preco, ativo")
+    .from("produtos")
+    .select(
+      "id, nome, descricao, preco, categoria, codigo, estoque, ativo"
+    )
     .eq("ativo", true)
-    .order("id");
+    .order("nome");
 
   return (
     <main className="min-h-screen bg-white p-10 text-black">
-      <h1 className="mb-8 text-3xl font-bold">
-        O Box Driver - Produtos de teste
-      </h1>
+      <div className="mx-auto max-w-5xl">
+        <h1 className="mb-8 text-3xl font-bold">
+          O Box Driver - Catálogo
+        </h1>
 
-      {error && (
-        <div className="rounded border border-red-400 p-4">
-          Erro ao consultar produtos: {error.message}
-        </div>
-      )}
-
-      <div className="space-y-4">
-        {produtos?.map((produto) => (
-          <div
-            key={produto.id}
-            className="rounded-lg border border-gray-300 p-4"
-          >
-            <h2 className="text-xl font-semibold">{produto.nome}</h2>
-
-            <p>
-              R$ {Number(produto.preco).toFixed(2).replace(".", ",")}
-            </p>
+        {error && (
+          <div className="mb-6 rounded-lg border border-red-400 p-4">
+            Erro ao carregar produtos: {error.message}
           </div>
-        ))}
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {produtos?.map((produto) => (
+            <Link
+              key={produto.id}
+              href={`/produto/${produto.codigo}`}
+              className="block rounded-xl border border-gray-300 p-5 transition hover:shadow-md"
+            >
+              <p className="mb-1 text-sm text-gray-500">
+                {produto.categoria}
+              </p>
+
+              <h2 className="text-xl font-bold">
+                {produto.nome}
+              </h2>
+
+              <p className="mt-2 text-gray-600">
+                {produto.descricao}
+              </p>
+
+              <p className="mt-4 text-2xl font-bold">
+                R$ {Number(produto.preco)
+                  .toFixed(2)
+                  .replace(".", ",")}
+              </p>
+
+              <div className="mt-3 text-sm text-gray-500">
+                <p>Código: {produto.codigo}</p>
+                <p>Estoque: {produto.estoque}</p>
+              </div>
+
+              <p className="mt-4 font-semibold">
+                Ver produto
+              </p>
+            </Link>
+          ))}
+        </div>
       </div>
     </main>
   );
