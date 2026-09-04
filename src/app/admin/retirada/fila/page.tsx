@@ -9,28 +9,50 @@ import {
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-type PedidoFila = {
+type RetiradaFila = {
   id: string;
-  numero_pedido: number;
+  sequencia: number;
   checkin_em: string;
   status: string;
-  total: number;
+
+  pedidos: {
+    numero_pedido: number;
+    total: number;
+  } | null;
+
+  unidades: {
+    id: string;
+    codigo: string;
+    nome: string;
+  } | null;
+
+  pontos_retirada: {
+    nome: string;
+  } | null;
 };
 
 export default function FilaRetiradaPage() {
   const router = useRouter();
 
-  const [pedidos, setPedidos] = useState<PedidoFila[]>([]);
-  const [carregando, setCarregando] = useState(true);
-  const [mensagem, setMensagem] = useState("");
+  const [retiradas, setRetiradas] =
+    useState<RetiradaFila[]>([]);
+
+  const [carregando, setCarregando] =
+    useState(true);
+
+  const [mensagem, setMensagem] =
+    useState("");
+
+  const [agora, setAgora] =
+    useState<number | null>(null);
 
   /*
-   * Guardamos o horário atual em um state.
+   * Por enquanto temos apenas uma unidade.
    *
-   * Isso evita chamar Date.now() diretamente durante
-   * o render, coisa que o React 19 / Next 16 reclama.
+   * Quando houver outras unidades/franquias,
+   * essa unidade virá do perfil do funcionário.
    */
-  const [agora, setAgora] = useState<number | null>(null);
+  const CODIGO_UNIDADE_ATUAL = "MOGI-01";
 
   const carregarFila = useCallback(async () => {
     const {
@@ -64,13 +86,40 @@ export default function FilaRetiradaPage() {
       return;
     }
 
+    /*
+     * Agora a fila é baseada em retiradas_pedido.
+     *
+     * Cada retirada tem:
+     * - unidade própria;
+     * - horário próprio de check-in;
+     * - status próprio.
+     */
     const { data, error } = await supabase
-      .from("pedidos")
-      .select(
-        "id, numero_pedido, checkin_em, status, total"
-      )
+      .from("retiradas_pedido")
+      .select(`
+        id,
+        sequencia,
+        checkin_em,
+        status,
+
+        pedidos (
+          numero_pedido,
+          total
+        ),
+
+        unidades (
+          id,
+          codigo,
+          nome
+        ),
+
+        pontos_retirada (
+          nome
+        )
+      `)
       .eq("status", "cliente_no_local")
       .not("checkin_em", "is", null)
+      .eq("unidades.codigo", CODIGO_UNIDADE_ATUAL)
       .order("checkin_em", {
         ascending: true,
       });
@@ -84,30 +133,30 @@ export default function FilaRetiradaPage() {
       return;
     }
 
-    setPedidos((data ?? []) as PedidoFila[]);
+    /*
+     * PostgREST pode retornar linhas cujo relacionamento
+     * com unidade venha nulo dependendo do join.
+     *
+     * Por segurança filtramos novamente no navegador.
+     */
+    const retiradasFiltradas =
+      ((data ?? []) as unknown as RetiradaFila[]).filter(
+        (retirada) =>
+          retirada.unidades?.codigo ===
+          CODIGO_UNIDADE_ATUAL
+      );
+
+    setRetiradas(retiradasFiltradas);
     setMensagem("");
     setCarregando(false);
   }, [router]);
 
   useEffect(() => {
-    /*
-     * Fazemos a primeira carga de forma assíncrona.
-     * Isso evita o erro:
-     *
-     * "Calling setState synchronously within an effect"
-     */
     const primeiraCarga = window.setTimeout(() => {
       carregarFila();
       setAgora(new Date().getTime());
     }, 0);
 
-    /*
-     * A cada 5 segundos:
-     *
-     * 1. atualiza a fila;
-     * 2. atualiza o relógio usado para calcular
-     *    o tempo de espera.
-     */
     const intervalo = window.setInterval(() => {
       carregarFila();
       setAgora(new Date().getTime());
@@ -120,10 +169,13 @@ export default function FilaRetiradaPage() {
   }, [carregarFila]);
 
   function formatarHora(data: string) {
-    return new Date(data).toLocaleTimeString("pt-BR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    return new Date(data).toLocaleTimeString(
+      "pt-BR",
+      {
+        hour: "2-digit",
+        minute: "2-digit",
+      }
+    );
   }
 
   function calcularTempoEspera(data: string) {
@@ -153,7 +205,10 @@ export default function FilaRetiradaPage() {
     const horas = Math.floor(minutos / 60);
     const minutosRestantes = minutos % 60;
 
-    if (horas === 1 && minutosRestantes === 0) {
+    if (
+      horas === 1 &&
+      minutosRestantes === 0
+    ) {
       return "há 1 hora";
     }
 
@@ -193,7 +248,7 @@ export default function FilaRetiradaPage() {
             </h1>
 
             <p className="mt-2 text-gray-500">
-              Ordem de chegada no ponto de retirada.
+              Ordem de chegada na unidade Mogi.
             </p>
           </div>
 
@@ -203,7 +258,7 @@ export default function FilaRetiradaPage() {
             </p>
 
             <p className="text-3xl font-bold">
-              {pedidos.length}
+              {retiradas.length}
             </p>
           </div>
         </div>
@@ -214,84 +269,130 @@ export default function FilaRetiradaPage() {
           </div>
         )}
 
-        {pedidos.length === 0 ? (
+        {retiradas.length === 0 ? (
           <div className="rounded-2xl border border-gray-300 p-10 text-center">
             <p className="text-2xl font-bold">
               Nenhum cliente aguardando
             </p>
 
             <p className="mt-2 text-gray-500">
-              Novos check-ins aparecerão automaticamente aqui.
+              Novos check-ins aparecerão
+              automaticamente aqui.
             </p>
           </div>
         ) : (
           <div className="space-y-4">
-            {pedidos.map((pedido, index) => (
-              <div
-                key={pedido.id}
-                className="rounded-2xl border border-gray-300 p-6"
-              >
-                <div className="flex flex-col justify-between gap-5 md:flex-row md:items-center">
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <span className="rounded-full border border-gray-300 px-3 py-1 text-sm font-semibold">
-                        #{index + 1}
-                      </span>
+            {retiradas.map(
+              (retirada, index) => {
+                const pedido =
+                  retirada.pedidos;
 
-                      <h2 className="text-2xl font-bold">
-                        Pedido nº {pedido.numero_pedido}
-                      </h2>
-                    </div>
+                const unidade =
+                  retirada.unidades;
 
-                    <div className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
-                      <p>
-                        <span className="text-gray-500">
-                          Check-in:
-                        </span>{" "}
-                        <strong>
-                          {formatarHora(
-                            pedido.checkin_em
-                          )}
-                        </strong>
-                      </p>
+                const ponto =
+                  retirada.pontos_retirada;
 
-                      <p>
-                        <span className="text-gray-500">
-                          Espera:
-                        </span>{" "}
-                        <strong>
-                          {calcularTempoEspera(
-                            pedido.checkin_em
-                          )}
-                        </strong>
-                      </p>
+                return (
+                  <div
+                    key={retirada.id}
+                    className="rounded-2xl border border-gray-300 p-6"
+                  >
+                    <div className="flex flex-col justify-between gap-5 md:flex-row md:items-center">
+                      <div>
+                        <div className="flex items-center gap-3">
+                          <span className="rounded-full border border-gray-300 px-3 py-1 text-sm font-semibold">
+                            #{index + 1}
+                          </span>
 
-                      <p>
-                        <span className="text-gray-500">
-                          Total:
-                        </span>{" "}
-                        <strong>
-                          {formatarValor(
-                            pedido.total
-                          )}
-                        </strong>
-                      </p>
+                          <h2 className="text-2xl font-bold">
+                            Pedido nº{" "}
+                            {pedido?.numero_pedido ??
+                              "-"}
+                          </h2>
+                        </div>
+
+                        <p className="mt-2 text-sm font-semibold text-gray-600">
+                          Retirada{" "}
+                          {retirada.sequencia}
+                        </p>
+
+                        <div className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
+                          <p>
+                            <span className="text-gray-500">
+                              Unidade:
+                            </span>{" "}
+                            <strong>
+                              {unidade?.nome ??
+                                "-"}
+                            </strong>
+                          </p>
+
+                          <p>
+                            <span className="text-gray-500">
+                              Ponto:
+                            </span>{" "}
+                            <strong>
+                              {ponto?.nome ?? "-"}
+                            </strong>
+                          </p>
+
+                          <p>
+                            <span className="text-gray-500">
+                              Check-in:
+                            </span>{" "}
+                            <strong>
+                              {formatarHora(
+                                retirada.checkin_em
+                              )}
+                            </strong>
+                          </p>
+
+                          <p>
+                            <span className="text-gray-500">
+                              Espera:
+                            </span>{" "}
+                            <strong>
+                              {calcularTempoEspera(
+                                retirada.checkin_em
+                              )}
+                            </strong>
+                          </p>
+
+                          <p>
+                            <span className="text-gray-500">
+                              Total do pedido:
+                            </span>{" "}
+                            <strong>
+                              {pedido
+                                ? formatarValor(
+                                    pedido.total
+                                  )
+                                : "-"}
+                            </strong>
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          if (
+                            pedido?.numero_pedido
+                          ) {
+                            router.push(
+                              `/admin/pedidos/${pedido.numero_pedido}`
+                            );
+                          }
+                        }}
+                        className="rounded-xl bg-black px-6 py-4 font-semibold text-white"
+                      >
+                        Abrir retirada
+                      </button>
                     </div>
                   </div>
-
-                  <button
-                    onClick={() =>
-                      router.push(
-                        `/admin/pedidos/${pedido.numero_pedido}`
-                      )
-                    }
-                    className="rounded-xl bg-black px-6 py-4 font-semibold text-white"
-                  >
-                    Abrir pedido
-                  </button>
-                </div>
-              </div>
-            ))}
+                );
+              }
+            )}
           </div>
         )}
 
