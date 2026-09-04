@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { QRCodeSVG } from "qrcode.react";
+
 import { supabase } from "@/lib/supabase";
 
 type Pedido = {
@@ -11,6 +13,7 @@ type Pedido = {
   created_at: string;
   status: string;
   total: number;
+  token_retirada: string;
 };
 
 type ItemPedido = {
@@ -49,7 +52,7 @@ export default function PedidoDetalhePage() {
         await supabase
           .from("pedidos")
           .select(
-            "id, numero_pedido, created_at, status, total"
+            "id, numero_pedido, created_at, status, total, token_retirada"
           )
           .eq("numero_pedido", numero)
           .eq("user_id", user.id)
@@ -59,6 +62,7 @@ export default function PedidoDetalhePage() {
         setMensagem(
           `Erro ao carregar pedido: ${pedidoError.message}`
         );
+
         setCarregando(false);
         return;
       }
@@ -86,6 +90,7 @@ export default function PedidoDetalhePage() {
         setMensagem(
           `Erro ao carregar itens: ${itensError.message}`
         );
+
         setCarregando(false);
         return;
       }
@@ -110,6 +115,31 @@ export default function PedidoDetalhePage() {
     return new Date(data).toLocaleString("pt-BR");
   }
 
+  function traduzirStatus(status: string) {
+    switch (status) {
+      case "recebido":
+        return "Pedido recebido";
+
+      case "em separação":
+        return "Em separação";
+
+      case "pronto_retirada":
+        return "Pronto para retirada";
+
+      case "cliente_no_local":
+        return "Check-in realizado";
+
+      case "entregue":
+        return "Entregue";
+
+      case "cancelado":
+        return "Cancelado";
+
+      default:
+        return status;
+    }
+  }
+
   if (carregando) {
     return (
       <main className="min-h-screen bg-white p-10 text-black">
@@ -123,7 +153,9 @@ export default function PedidoDetalhePage() {
       <main className="min-h-screen bg-white p-10 text-black">
         <div className="mx-auto max-w-3xl">
           <div className="rounded-lg border border-gray-300 p-6">
-            <p>{mensagem || "Pedido não encontrado."}</p>
+            <p>
+              {mensagem || "Pedido não encontrado."}
+            </p>
 
             <Link
               href="/area-cliente"
@@ -156,9 +188,106 @@ export default function PedidoDetalhePage() {
           </div>
 
           <span className="w-fit rounded-full border border-gray-300 px-4 py-2 font-semibold">
-            {pedido.status}
+            {traduzirStatus(pedido.status)}
           </span>
         </div>
+
+        {pedido.status === "pronto_retirada" && (
+          <div className="mb-8 rounded-2xl border-2 border-green-400 bg-green-50 p-8 text-center">
+            <p className="text-sm font-semibold uppercase tracking-widest text-green-700">
+              Pedido pronto
+            </p>
+
+            <h2 className="mt-2 text-2xl font-bold">
+              Seu pedido está pronto para retirada
+            </h2>
+
+            <p className="mt-3 text-gray-600">
+              Ao chegar ao O Box Driver, apresente este QR
+              Code no terminal de autoatendimento.
+            </p>
+
+            <div className="mt-8 flex justify-center">
+              <div className="rounded-2xl border border-gray-300 bg-white p-6">
+                <QRCodeSVG
+                  value={pedido.token_retirada}
+                  size={240}
+                  level="H"
+                  includeMargin
+                />
+              </div>
+            </div>
+
+            <p className="mt-6 font-semibold">
+              Pedido nº {pedido.numero_pedido}
+            </p>
+
+            <p className="mt-2 text-sm text-gray-500">
+              Não é necessário informar o número do pedido no
+              terminal. Apenas apresente o QR Code.
+            </p>
+          </div>
+        )}
+
+        {pedido.status === "cliente_no_local" && (
+          <div className="mb-8 rounded-2xl border-2 border-orange-400 bg-orange-50 p-8 text-center">
+            <p className="text-sm font-semibold uppercase tracking-widest text-orange-700">
+              Check-in realizado
+            </p>
+
+            <h2 className="mt-2 text-2xl font-bold">
+              Identificamos sua chegada
+            </h2>
+
+            <p className="mt-3 text-lg">
+              Siga a orientação exibida no terminal de
+              autoatendimento e dirija-se ao ponto de
+              retirada.
+            </p>
+          </div>
+        )}
+
+        {pedido.status === "entregue" && (
+          <div className="mb-8 rounded-2xl border-2 border-green-400 bg-green-50 p-8 text-center">
+            <p className="text-sm font-semibold uppercase tracking-widest text-green-700">
+              Retirada concluída
+            </p>
+
+            <h2 className="mt-2 text-2xl font-bold">
+              Pedido entregue
+            </h2>
+
+            <p className="mt-3 text-gray-600">
+              A retirada deste pedido já foi concluída.
+            </p>
+          </div>
+        )}
+
+        {pedido.status === "em separação" && (
+          <div className="mb-8 rounded-2xl border border-blue-300 bg-blue-50 p-6">
+            <p className="font-bold">
+              Estamos separando seu pedido
+            </p>
+
+            <p className="mt-2 text-gray-600">
+              Assim que a conferência terminar, o QR Code de
+              retirada ficará disponível aqui.
+            </p>
+          </div>
+        )}
+
+        {pedido.status === "recebido" && (
+          <div className="mb-8 rounded-2xl border border-gray-300 bg-gray-50 p-6">
+            <p className="font-bold">
+              Pedido recebido
+            </p>
+
+            <p className="mt-2 text-gray-600">
+              Seu pedido foi recebido e em breve seguirá para
+              separação.
+            </p>
+          </div>
+        )}
 
         <div className="space-y-4">
           {itens.map((item) => (
@@ -203,7 +332,9 @@ export default function PedidoDetalhePage() {
                   </p>
 
                   <p className="font-semibold">
-                    {formatarValor(item.subtotal)}
+                    {formatarValor(
+                      item.subtotal
+                    )}
                   </p>
                 </div>
               </div>
