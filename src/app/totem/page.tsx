@@ -18,6 +18,11 @@ type RetornoCheckin = {
   instrucao_cliente: string;
 };
 
+type CheckinJaRealizado = {
+  pedido?: number;
+  mensagem: string;
+};
+
 export default function TotemPage() {
   const router = useRouter();
 
@@ -52,6 +57,14 @@ export default function TotemPage() {
       null
     );
 
+  const [
+    checkinJaRealizado,
+    setCheckinJaRealizado,
+  ] =
+    useState<CheckinJaRealizado | null>(
+      null
+    );
+
   function limparTimer() {
     if (timerRef.current !== null) {
       window.clearTimeout(
@@ -60,6 +73,20 @@ export default function TotemPage() {
 
       timerRef.current = null;
     }
+  }
+
+  function extrairNumeroPedido(
+    mensagem: string
+  ) {
+    const resultado = mensagem.match(
+      /Pedido nº\s*(\d+)/i
+    );
+
+    if (!resultado) {
+      return undefined;
+    }
+
+    return Number(resultado[1]);
   }
 
   const pararCamera =
@@ -100,6 +127,8 @@ export default function TotemPage() {
         }
 
         setErro("");
+        setCheckin(null);
+        setCheckinJaRealizado(null);
         setProcessando(true);
 
         await pararCamera();
@@ -134,8 +163,48 @@ export default function TotemPage() {
           }
 
           if (!resposta.ok) {
+            const mensagemErro =
+              String(
+                retorno.erro ?? ""
+              );
+
+            const checkinDuplicado =
+              mensagemErro
+                .toLowerCase()
+                .includes(
+                  "check-in do pedido"
+                ) &&
+              mensagemErro
+                .toLowerCase()
+                .includes(
+                  "já foi realizado"
+                );
+
+            if (checkinDuplicado) {
+              setCheckinJaRealizado({
+                pedido:
+                  extrairNumeroPedido(
+                    mensagemErro
+                  ),
+                mensagem:
+                  mensagemErro,
+              });
+
+              setProcessando(false);
+
+              timerRef.current =
+                window.setTimeout(
+                  () => {
+                    window.location.reload();
+                  },
+                  8000
+                );
+
+              return;
+            }
+
             setErro(
-              retorno.erro ??
+              mensagemErro ||
                 "Não foi possível realizar o check-in."
             );
 
@@ -360,6 +429,45 @@ export default function TotemPage() {
             <p className="mt-8 text-sm text-gray-500">
               Em instantes esta tela estará
               pronta para o próximo cliente.
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (checkinJaRealizado) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-white p-6 text-black">
+        <div className="w-full max-w-3xl">
+          <div className="rounded-3xl border-2 border-blue-400 bg-blue-50 p-8 text-center">
+            <p className="text-lg font-semibold text-blue-700">
+              Check-in já realizado
+            </p>
+
+            {checkinJaRealizado.pedido && (
+              <h1 className="mt-3 text-4xl font-bold">
+                Pedido nº{" "}
+                {
+                  checkinJaRealizado.pedido
+                }
+              </h1>
+            )}
+
+            <p className="mt-6 text-2xl font-bold">
+              Seu pedido já foi identificado.
+            </p>
+
+            <div className="mt-8 rounded-2xl border border-blue-300 bg-white p-8">
+              <p className="text-xl font-semibold">
+                Dirija-se ao ponto de retirada
+                e aguarde o atendimento.
+              </p>
+            </div>
+
+            <p className="mt-8 text-sm text-gray-500">
+              Não é necessário ler o QR Code
+              novamente.
             </p>
           </div>
         </div>
