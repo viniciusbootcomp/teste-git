@@ -18,29 +18,43 @@ type Pedido = {
   status_pagamento: string;
   total: number;
   user_id: string;
-  separacao_iniciada_em: string | null;
   checkin_em: string | null;
   entregue_em: string | null;
 };
 
-type ItemPedido = {
+type Retirada = {
   id: string;
-  nome_produto: string;
-  codigo_produto: string;
+  sequencia: number;
+  status: string;
+  separacao_iniciada_em: string | null;
+  separacao_finalizada_em: string | null;
+};
+
+type ItemRetirada = {
+  id: string;
+  item_pedido_id: string;
   quantidade: number;
   quantidade_separada: number;
-  preco_unitario: number;
-  subtotal: number;
+  itens_pedido: {
+    nome_produto: string;
+    codigo_produto: string;
+    preco_unitario: number;
+    subtotal: number;
+  } | null;
 };
 
 type RetornoLeitura = {
+  sucesso: boolean;
   pedido: number;
+  retirada: number;
+  retirada_id: string;
   codigo: string;
   produto: string;
   quantidade_pedida: number;
   quantidade_separada: number;
   item_concluido: boolean;
-  pedido_concluido: boolean;
+  retirada_concluida: boolean;
+  status: string;
 };
 
 type RetornoEntrega = {
@@ -59,7 +73,10 @@ export default function AdminPedidoDetalhePage() {
   const timerMensagemRef = useRef<number | null>(null);
 
   const [pedido, setPedido] = useState<Pedido | null>(null);
-  const [itens, setItens] = useState<ItemPedido[]>([]);
+  const [retirada, setRetirada] = useState<Retirada | null>(
+    null
+  );
+  const [itens, setItens] = useState<ItemRetirada[]>([]);
 
   const [codigoLido, setCodigoLido] = useState("");
 
@@ -79,7 +96,7 @@ export default function AdminPedidoDetalhePage() {
   const [confirmandoEntrega, setConfirmandoEntrega] =
     useState(false);
 
-  const [pedidoConcluido, setPedidoConcluido] =
+  const [retiradaConcluida, setRetiradaConcluida] =
     useState(false);
 
   function limparTimerMensagem() {
@@ -133,7 +150,6 @@ export default function AdminPedidoDetalhePage() {
       setMensagem(
         `Erro ao verificar acesso: ${perfilError.message}`
       );
-
       setCarregando(false);
       return;
     }
@@ -147,7 +163,7 @@ export default function AdminPedidoDetalhePage() {
       await supabase
         .from("pedidos")
         .select(
-          "id, numero_pedido, created_at, status, status_pagamento, total, user_id, separacao_iniciada_em, checkin_em, entregue_em"
+          "id, numero_pedido, created_at, status, status_pagamento, total, user_id, checkin_em, entregue_em"
         )
         .eq("numero_pedido", numero)
         .maybeSingle();
@@ -156,7 +172,6 @@ export default function AdminPedidoDetalhePage() {
       setMensagem(
         `Erro ao carregar pedido: ${pedidoError.message}`
       );
-
       setCarregando(false);
       return;
     }
@@ -169,27 +184,64 @@ export default function AdminPedidoDetalhePage() {
 
     setPedido(pedidoData);
 
-    const { data: itensData, error: itensError } =
+    const { data: retiradaData, error: retiradaError } =
       await supabase
-        .from("itens_pedido")
+        .from("retiradas_pedido")
         .select(
-          "id, nome_produto, codigo_produto, quantidade, quantidade_separada, preco_unitario, subtotal"
+          "id, sequencia, status, separacao_iniciada_em, separacao_finalizada_em"
         )
         .eq("pedido_id", pedidoData.id)
+        .eq("sequencia", 1)
+        .maybeSingle();
+
+    if (retiradaError) {
+      setMensagem(
+        `Erro ao carregar retirada: ${retiradaError.message}`
+      );
+      setCarregando(false);
+      return;
+    }
+
+    if (!retiradaData) {
+      setMensagem(
+        "Este pedido ainda não possui retirada cadastrada."
+      );
+      setCarregando(false);
+      return;
+    }
+
+    setRetirada(retiradaData);
+
+    const { data: itensData, error: itensError } =
+      await supabase
+        .from("itens_retirada")
+        .select(`
+          id,
+          item_pedido_id,
+          quantidade,
+          quantidade_separada,
+          itens_pedido (
+            nome_produto,
+            codigo_produto,
+            preco_unitario,
+            subtotal
+          )
+        `)
+        .eq("retirada_id", retiradaData.id)
         .order("created_at", {
           ascending: true,
         });
 
     if (itensError) {
       setMensagem(
-        `Erro ao carregar itens: ${itensError.message}`
+        `Erro ao carregar itens da retirada: ${itensError.message}`
       );
-
       setCarregando(false);
       return;
     }
 
-    const itensCarregados = itensData ?? [];
+    const itensCarregados =
+      (itensData ?? []) as unknown as ItemRetirada[];
 
     setItens(itensCarregados);
 
@@ -201,8 +253,7 @@ export default function AdminPedidoDetalhePage() {
           Number(item.quantidade)
       );
 
-    setPedidoConcluido(todosConcluidos);
-
+    setRetiradaConcluida(todosConcluidos);
     setCarregando(false);
   }, [numero, router]);
 
@@ -218,21 +269,25 @@ export default function AdminPedidoDetalhePage() {
   }, [carregarPedido]);
 
   useEffect(() => {
-    if (pedido?.status === "em separação") {
+    if (retirada?.status === "em_separacao") {
       focarLeitor();
     }
-  }, [pedido?.status]);
+  }, [retirada?.status]);
 
   async function iniciarSeparacao() {
+    if (!retirada) {
+      return;
+    }
+
     setMensagem("");
     setMensagemLeitura("");
     setTipoMensagemLeitura("");
     setIniciando(true);
 
     const { error } = await supabase.rpc(
-      "iniciar_separacao",
+      "iniciar_separacao_retirada",
       {
-        p_numero_pedido: numero,
+        p_retirada_id: retirada.id,
       }
     );
 
@@ -240,7 +295,6 @@ export default function AdminPedidoDetalhePage() {
       setMensagem(
         `Não foi possível iniciar a separação: ${error.message}`
       );
-
       setIniciando(false);
       return;
     }
@@ -258,6 +312,10 @@ export default function AdminPedidoDetalhePage() {
   }
 
   async function registrarLeitura() {
+    if (!retirada) {
+      return;
+    }
+
     const codigo = codigoLido.trim();
 
     if (!codigo) {
@@ -268,9 +326,9 @@ export default function AdminPedidoDetalhePage() {
     setRegistrandoLeitura(true);
 
     const { data, error } = await supabase.rpc(
-      "registrar_leitura_separacao",
+      "registrar_leitura_separacao_retirada",
       {
-        p_numero_pedido: numero,
+        p_retirada_id: retirada.id,
         p_codigo_lido: codigo,
       }
     );
@@ -283,7 +341,6 @@ export default function AdminPedidoDetalhePage() {
 
       setCodigoLido("");
       setRegistrandoLeitura(false);
-
       focarLeitor();
       return;
     }
@@ -302,7 +359,7 @@ export default function AdminPedidoDetalhePage() {
       );
     }
 
-    setPedidoConcluido(retorno.pedido_concluido);
+    setRetiradaConcluida(retorno.retirada_concluida);
 
     setCodigoLido("");
 
@@ -310,7 +367,9 @@ export default function AdminPedidoDetalhePage() {
 
     setRegistrandoLeitura(false);
 
-    focarLeitor();
+    if (!retorno.retirada_concluida) {
+      focarLeitor();
+    }
   }
 
   async function confirmarEntrega() {
@@ -340,7 +399,6 @@ export default function AdminPedidoDetalhePage() {
       setMensagem(
         `Não foi possível confirmar a entrega: ${error.message}`
       );
-
       setConfirmandoEntrega(false);
       return;
     }
@@ -351,7 +409,6 @@ export default function AdminPedidoDetalhePage() {
       setMensagem(
         "Não foi possível confirmar a entrega do pedido."
       );
-
       setConfirmandoEntrega(false);
       return;
     }
@@ -392,6 +449,31 @@ export default function AdminPedidoDetalhePage() {
     return new Date(data).toLocaleString("pt-BR");
   }
 
+  function traduzirStatusRetirada(status: string) {
+    switch (status) {
+      case "recebido":
+        return "Recebido";
+
+      case "em_separacao":
+        return "Em separação";
+
+      case "pronto_retirada":
+        return "Pronto para retirada";
+
+      case "cliente_no_local":
+        return "Cliente no local";
+
+      case "entregue":
+        return "Entregue";
+
+      case "cancelado":
+        return "Cancelado";
+
+      default:
+        return status;
+    }
+  }
+
   if (carregando) {
     return (
       <main className="min-h-screen bg-white p-10 text-black">
@@ -400,13 +482,13 @@ export default function AdminPedidoDetalhePage() {
     );
   }
 
-  if (!pedido) {
+  if (!pedido || !retirada) {
     return (
       <main className="min-h-screen bg-white p-10 text-black">
         <div className="mx-auto max-w-4xl">
           <div className="rounded-lg border border-gray-300 p-6">
             <p>
-              {mensagem || "Pedido não encontrado."}
+              {mensagem || "Pedido ou retirada não encontrados."}
             </p>
 
             <button
@@ -425,7 +507,7 @@ export default function AdminPedidoDetalhePage() {
 
   const podeIniciarSeparacao =
     pedido.status_pagamento === "aprovado" &&
-    pedido.status === "recebido";
+    retirada.status === "recebido";
 
   const podeConfirmarEntrega =
     pedido.status === "cliente_no_local";
@@ -446,6 +528,10 @@ export default function AdminPedidoDetalhePage() {
             <p className="mt-2 text-sm text-gray-500">
               {formatarData(pedido.created_at)}
             </p>
+
+            <p className="mt-2 text-sm text-gray-500">
+              Retirada {retirada.sequencia}
+            </p>
           </div>
 
           <div className="min-w-72 space-y-3">
@@ -461,11 +547,11 @@ export default function AdminPedidoDetalhePage() {
 
             <div className="rounded-lg border border-gray-300 p-4">
               <p className="text-sm text-gray-500">
-                Status operacional
+                Status da retirada
               </p>
 
               <p className="mt-1 font-bold">
-                {pedido.status}
+                {traduzirStatusRetirada(retirada.status)}
               </p>
             </div>
           </div>
@@ -496,18 +582,18 @@ export default function AdminPedidoDetalhePage() {
           </button>
         )}
 
-        {pedido.status === "em separação" && (
+        {retirada.status === "em_separacao" && (
           <>
             <div className="mb-6 rounded-lg border border-green-300 bg-green-50 p-4">
               <p className="font-semibold">
-                Separação em andamento
+                Separação da retirada em andamento
               </p>
 
-              {pedido.separacao_iniciada_em && (
+              {retirada.separacao_iniciada_em && (
                 <p className="mt-1 text-sm">
                   Iniciada em{" "}
                   {formatarData(
-                    pedido.separacao_iniciada_em
+                    retirada.separacao_iniciada_em
                   )}
                 </p>
               )}
@@ -558,57 +644,16 @@ export default function AdminPedidoDetalhePage() {
           </>
         )}
 
-        {pedido.status === "pronto_retirada" && (
+        {retirada.status === "pronto_retirada" && (
           <div className="mb-8 rounded-xl border border-blue-300 bg-blue-50 p-6">
             <p className="text-xl font-bold">
-              Pedido pronto para retirada
+              Retirada pronta
             </p>
 
             <p className="mt-2">
-              Todos os produtos foram conferidos. Estamos
-              aguardando o cliente realizar o check-in no
-              terminal de autoatendimento.
+              Todos os produtos desta retirada foram
+              conferidos.
             </p>
-          </div>
-        )}
-
-        {pedido.status === "cliente_no_local" && (
-          <div className="mb-8 rounded-xl border-2 border-orange-400 bg-orange-50 p-6">
-            <p className="text-2xl font-bold">
-              Cliente no local
-            </p>
-
-            <p className="mt-2">
-              O cliente realizou o check-in e está aguardando
-              a retirada da mercadoria.
-            </p>
-
-            {pedido.checkin_em && (
-              <p className="mt-3 font-semibold">
-                Check-in:{" "}
-                {formatarData(pedido.checkin_em)}
-              </p>
-            )}
-          </div>
-        )}
-
-        {pedido.status === "entregue" && (
-          <div className="mb-8 rounded-xl border-2 border-green-400 bg-green-50 p-6">
-            <p className="text-2xl font-bold">
-              Pedido entregue
-            </p>
-
-            <p className="mt-2">
-              A entrega física deste pedido já foi
-              confirmada.
-            </p>
-
-            {pedido.entregue_em && (
-              <p className="mt-3 font-semibold">
-                Entregue em:{" "}
-                {formatarData(pedido.entregue_em)}
-              </p>
-            )}
           </div>
         )}
 
@@ -618,6 +663,8 @@ export default function AdminPedidoDetalhePage() {
               Number(item.quantidade_separada) >=
               Number(item.quantidade);
 
+            const produto = item.itens_pedido;
+
             return (
               <div
                 key={item.id}
@@ -626,11 +673,13 @@ export default function AdminPedidoDetalhePage() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <h2 className="text-xl font-bold">
-                      {item.nome_produto}
+                      {produto?.nome_produto ??
+                        "Produto"}
                     </h2>
 
                     <p className="mt-1 text-sm text-gray-500">
-                      Código: {item.codigo_produto}
+                      Código:{" "}
+                      {produto?.codigo_produto ?? "-"}
                     </p>
                   </div>
 
@@ -668,9 +717,11 @@ export default function AdminPedidoDetalhePage() {
                     </p>
 
                     <p className="font-semibold">
-                      {formatarValor(
-                        item.preco_unitario
-                      )}
+                      {produto
+                        ? formatarValor(
+                            produto.preco_unitario
+                          )
+                        : "-"}
                     </p>
                   </div>
 
@@ -680,9 +731,11 @@ export default function AdminPedidoDetalhePage() {
                     </p>
 
                     <p className="font-semibold">
-                      {formatarValor(
-                        item.subtotal
-                      )}
+                      {produto
+                        ? formatarValor(
+                            produto.subtotal
+                          )
+                        : "-"}
                     </p>
                   </div>
                 </div>
@@ -691,15 +744,15 @@ export default function AdminPedidoDetalhePage() {
           })}
         </div>
 
-        {pedido.status === "em separação" &&
-          pedidoConcluido && (
+        {retirada.status === "em_separacao" &&
+          retiradaConcluida && (
             <div className="mt-8 rounded-xl border border-green-400 bg-green-50 p-6">
               <p className="text-xl font-bold">
                 Todos os itens foram separados.
               </p>
 
               <p className="mt-2">
-                A separação será finalizada automaticamente
+                A retirada será finalizada automaticamente
                 pelo sistema.
               </p>
             </div>
