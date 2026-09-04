@@ -85,8 +85,7 @@ export async function POST(
     if (!terminalIdentificador) {
       return NextResponse.json(
         {
-          erro:
-            "Terminal não ativado.",
+          erro: "Terminal não ativado.",
         },
         {
           status: 401,
@@ -104,8 +103,7 @@ export async function POST(
     if (!tokenRetirada) {
       return NextResponse.json(
         {
-          erro:
-            "QR Code inválido.",
+          erro: "QR Code inválido.",
         },
         {
           status: 400,
@@ -115,7 +113,7 @@ export async function POST(
 
     const { data, error } =
       await supabaseAdmin.rpc(
-        "registrar_checkin_totem",
+        "registrar_checkin_totem_retirada",
         {
           p_token_retirada:
             tokenRetirada,

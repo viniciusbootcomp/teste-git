@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: [
-    "liabilities-initial-screensaver-keys.trycloudflare.com",
+    "annotation-newcastle-resistance-come.trycloudflare.com",
   ],
 };
 
