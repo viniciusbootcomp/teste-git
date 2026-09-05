@@ -83,7 +83,7 @@ export default function CheckoutPage() {
   const total = useMemo(() => {
     return itens.reduce(
       (soma, item) =>
-        soma + item.preco * item.quantidade,
+        soma + Number(item.preco) * Number(item.quantidade),
       0
     );
   }, [itens]);
@@ -96,23 +96,57 @@ export default function CheckoutPage() {
       return;
     }
 
+    const possuiQuantidadeInvalida = itens.some(
+      (item) =>
+        !Number.isInteger(Number(item.quantidade)) ||
+        Number(item.quantidade) <= 0
+    );
+
+    if (possuiQuantidadeInvalida) {
+      setMensagem(
+        "Existe um item com quantidade inválida no carrinho."
+      );
+      return;
+    }
+
     setFinalizando(true);
 
+    /*
+     * Enviamos ao banco somente:
+     *
+     * - produto_id
+     * - quantidade
+     *
+     * Preço, estoque, unidade e distribuição
+     * NÃO são confiados ao navegador.
+     *
+     * A função no PostgreSQL recalcula tudo.
+     */
     const itensParaBanco = itens.map((item) => ({
       produto_id: item.id,
-      quantidade: item.quantidade,
+      quantidade: Number(item.quantidade),
     }));
 
-    const { data: numeroPedido, error } = await supabase.rpc(
-      "finalizar_pedido",
-      {
-        p_itens: itensParaBanco,
-      }
-    );
+    const { data: numeroPedido, error } =
+      await supabase.rpc(
+        "finalizar_pedido_multiunidade",
+        {
+          p_itens: itensParaBanco,
+        }
+      );
 
     if (error) {
       setMensagem(
         `Não foi possível finalizar o pedido: ${error.message}`
+      );
+
+      setFinalizando(false);
+      return;
+    }
+
+    if (numeroPedido === null || numeroPedido === undefined) {
+      setMensagem(
+        "O pedido foi processado, mas o número do pedido não foi retornado."
       );
 
       setFinalizando(false);
@@ -209,20 +243,29 @@ export default function CheckoutPage() {
                       </p>
 
                       <p className="text-sm text-gray-500">
-                        {item.quantidade} x R${" "}
-                        {item.preco
-                          .toFixed(2)
-                          .replace(".", ",")}
+                        {item.quantidade} x{" "}
+                        {Number(
+                          item.preco
+                        ).toLocaleString(
+                          "pt-BR",
+                          {
+                            style: "currency",
+                            currency: "BRL",
+                          }
+                        )}
                       </p>
 
                       <p className="mt-2 font-bold">
-                        R${" "}
                         {(
-                          item.preco *
-                          item.quantidade
-                        )
-                          .toFixed(2)
-                          .replace(".", ",")}
+                          Number(item.preco) *
+                          Number(item.quantidade)
+                        ).toLocaleString(
+                          "pt-BR",
+                          {
+                            style: "currency",
+                            currency: "BRL",
+                          }
+                        )}
                       </p>
                     </div>
                   ))}
@@ -234,21 +277,26 @@ export default function CheckoutPage() {
                   </p>
 
                   <p className="text-3xl font-bold">
-                    R${" "}
-                    {total
-                      .toFixed(2)
-                      .replace(".", ",")}
+                    {total.toLocaleString(
+                      "pt-BR",
+                      {
+                        style: "currency",
+                        currency: "BRL",
+                      }
+                    )}
                   </p>
 
                   <p className="mt-2 text-sm text-gray-500">
-                    O estoque e os valores serão validados
-                    novamente no momento da finalização.
+                    O estoque, os valores e os pontos de
+                    retirada serão validados novamente no
+                    momento da finalização.
                   </p>
                 </div>
               </div>
             </div>
 
             <button
+              type="button"
               onClick={finalizarPedido}
               disabled={finalizando}
               className="mt-8 w-full rounded-lg bg-black p-4 font-semibold text-white disabled:bg-gray-400"
