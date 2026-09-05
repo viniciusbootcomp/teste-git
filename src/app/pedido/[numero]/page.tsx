@@ -24,6 +24,23 @@ type ItemPedido = {
   subtotal: number;
 };
 
+type ItemPedidoRetirada = {
+  id: string;
+  nome_produto: string;
+  codigo_produto: string;
+  preco_unitario: number;
+};
+
+type ItemRetirada = {
+  id: string;
+  retirada_id: string;
+  item_pedido_id: string;
+  quantidade: number;
+  quantidade_separada: number;
+
+  itens_pedido: ItemPedidoRetirada | null;
+};
+
 type Retirada = {
   id: string;
   sequencia: number;
@@ -51,76 +68,133 @@ export default function PedidoDetalhePage() {
 
   const numero = Number(params.numero);
 
-  const [pedido, setPedido] = useState<Pedido | null>(null);
-  const [itens, setItens] = useState<ItemPedido[]>([]);
-  const [retiradas, setRetiradas] = useState<Retirada[]>([]);
+  const [pedido, setPedido] =
+    useState<Pedido | null>(null);
 
-  const [carregando, setCarregando] = useState(true);
-  const [mensagem, setMensagem] = useState("");
+  const [itens, setItens] =
+    useState<ItemPedido[]>([]);
+
+  const [retiradas, setRetiradas] =
+    useState<Retirada[]>([]);
+
+  const [itensRetirada, setItensRetirada] =
+    useState<ItemRetirada[]>([]);
+
+  const [carregando, setCarregando] =
+    useState(true);
+
+  const [mensagem, setMensagem] =
+    useState("");
 
   useEffect(() => {
-    const carregarPedido = window.setTimeout(async () => {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+    const carregarPedido =
+      window.setTimeout(async () => {
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
 
-      if (userError || !user) {
-        router.push("/login");
-        return;
-      }
+        if (userError || !user) {
+          router.push("/login");
+          return;
+        }
 
-      const { data: pedidoData, error: pedidoError } =
-        await supabase
+        /*
+         * =================================================
+         * PEDIDO COMERCIAL
+         * =================================================
+         */
+
+        const {
+          data: pedidoData,
+          error: pedidoError,
+        } = await supabase
           .from("pedidos")
           .select(
-            "id, numero_pedido, created_at, status_pagamento, total"
+            `
+              id,
+              numero_pedido,
+              created_at,
+              status_pagamento,
+              total
+            `
           )
           .eq("numero_pedido", numero)
           .eq("user_id", user.id)
           .maybeSingle();
 
-      if (pedidoError) {
-        setMensagem(
-          `Erro ao carregar pedido: ${pedidoError.message}`
-        );
+        if (pedidoError) {
+          setMensagem(
+            `Erro ao carregar pedido: ${pedidoError.message}`
+          );
 
-        setCarregando(false);
-        return;
-      }
+          setCarregando(false);
+          return;
+        }
 
-      if (!pedidoData) {
-        setMensagem("Pedido não encontrado.");
-        setCarregando(false);
-        return;
-      }
+        if (!pedidoData) {
+          setMensagem(
+            "Pedido não encontrado."
+          );
 
-      setPedido(pedidoData);
+          setCarregando(false);
+          return;
+        }
 
-      const { data: itensData, error: itensError } =
-        await supabase
+        setPedido(pedidoData);
+
+        /*
+         * =================================================
+         * ITENS COMERCIAIS DO PEDIDO
+         * =================================================
+         */
+
+        const {
+          data: itensData,
+          error: itensError,
+        } = await supabase
           .from("itens_pedido")
           .select(
-            "id, nome_produto, codigo_produto, quantidade, preco_unitario, subtotal"
+            `
+              id,
+              nome_produto,
+              codigo_produto,
+              quantidade,
+              preco_unitario,
+              subtotal
+            `
           )
-          .eq("pedido_id", pedidoData.id)
+          .eq(
+            "pedido_id",
+            pedidoData.id
+          )
           .order("created_at", {
             ascending: true,
           });
 
-      if (itensError) {
-        setMensagem(
-          `Erro ao carregar itens: ${itensError.message}`
+        if (itensError) {
+          setMensagem(
+            `Erro ao carregar itens: ${itensError.message}`
+          );
+
+          setCarregando(false);
+          return;
+        }
+
+        setItens(
+          (itensData ?? []) as ItemPedido[]
         );
 
-        setCarregando(false);
-        return;
-      }
+        /*
+         * =================================================
+         * RETIRADAS DO PEDIDO
+         * =================================================
+         */
 
-      setItens(itensData ?? []);
-
-      const { data: retiradasData, error: retiradasError } =
-        await supabase
+        const {
+          data: retiradasData,
+          error: retiradasError,
+        } = await supabase
           .from("retiradas_pedido")
           .select(`
             id,
@@ -142,44 +216,145 @@ export default function PedidoDetalhePage() {
               instrucao_cliente
             )
           `)
-          .eq("pedido_id", pedidoData.id)
+          .eq(
+            "pedido_id",
+            pedidoData.id
+          )
           .order("sequencia", {
             ascending: true,
           });
 
-      if (retiradasError) {
-        setMensagem(
-          `Erro ao carregar retiradas: ${retiradasError.message}`
+        if (retiradasError) {
+          setMensagem(
+            `Erro ao carregar retiradas: ${retiradasError.message}`
+          );
+
+          setCarregando(false);
+          return;
+        }
+
+        const retiradasCarregadas =
+          (retiradasData ??
+            []) as unknown as Retirada[];
+
+        setRetiradas(
+          retiradasCarregadas
         );
 
+        /*
+         * =================================================
+         * ITENS DISTRIBUÍDOS ENTRE AS RETIRADAS
+         * =================================================
+         *
+         * Aqui está a principal mudança.
+         *
+         * itens_pedido:
+         * visão comercial total
+         *
+         * itens_retirada:
+         * visão física de cada unidade
+         *
+         * Exemplo:
+         *
+         * Pedido:
+         * Silicone x23
+         *
+         * Retirada Mogi:
+         * Silicone x20
+         *
+         * Retirada Suzano:
+         * Silicone x3
+         * =================================================
+         */
+
+        if (
+          retiradasCarregadas.length >
+          0
+        ) {
+          const idsRetiradas =
+            retiradasCarregadas.map(
+              (retirada) =>
+                retirada.id
+            );
+
+          const {
+            data:
+              itensRetiradaData,
+            error:
+              itensRetiradaError,
+          } = await supabase
+            .from("itens_retirada")
+            .select(`
+              id,
+              retirada_id,
+              item_pedido_id,
+              quantidade,
+              quantidade_separada,
+
+              itens_pedido (
+                id,
+                nome_produto,
+                codigo_produto,
+                preco_unitario
+              )
+            `)
+            .in(
+              "retirada_id",
+              idsRetiradas
+            )
+            .order("created_at", {
+              ascending: true,
+            });
+
+          if (itensRetiradaError) {
+            setMensagem(
+              `Erro ao carregar itens das retiradas: ${itensRetiradaError.message}`
+            );
+
+            setCarregando(false);
+            return;
+          }
+
+          setItensRetirada(
+            (itensRetiradaData ??
+              []) as unknown as ItemRetirada[]
+          );
+        } else {
+          setItensRetirada([]);
+        }
+
         setCarregando(false);
-        return;
-      }
-
-      setRetiradas(
-        (retiradasData ?? []) as unknown as Retirada[]
-      );
-
-      setCarregando(false);
-    }, 0);
+      }, 0);
 
     return () => {
-      window.clearTimeout(carregarPedido);
+      window.clearTimeout(
+        carregarPedido
+      );
     };
   }, [numero, router]);
 
-  function formatarValor(valor: number) {
-    return Number(valor).toLocaleString("pt-BR", {
+  function formatarValor(
+    valor: number
+  ) {
+    return Number(
+      valor
+    ).toLocaleString("pt-BR", {
       style: "currency",
       currency: "BRL",
     });
   }
 
-  function formatarData(data: string) {
-    return new Date(data).toLocaleString("pt-BR");
+  function formatarData(
+    data: string
+  ) {
+    return new Date(
+      data
+    ).toLocaleString("pt-BR");
   }
 
-  function traduzirStatus(status: string) {
+  function traduzirStatus(
+    status: string
+  ) {
     switch (status) {
       case "recebido":
         return "Pedido recebido";
@@ -204,10 +379,36 @@ export default function PedidoDetalhePage() {
     }
   }
 
+  function traduzirPagamento(
+    status: string
+  ) {
+    switch (status) {
+      case "pendente":
+        return "Pendente";
+
+      case "aprovado":
+        return "Aprovado";
+
+      case "recusado":
+        return "Recusado";
+
+      case "cancelado":
+        return "Cancelado";
+
+      case "estornado":
+        return "Estornado";
+
+      default:
+        return status;
+    }
+  }
+
   if (carregando) {
     return (
       <main className="min-h-screen bg-white p-10 text-black">
-        <p>Carregando pedido...</p>
+        <p>
+          Carregando pedido...
+        </p>
       </main>
     );
   }
@@ -218,14 +419,16 @@ export default function PedidoDetalhePage() {
         <div className="mx-auto max-w-3xl">
           <div className="rounded-lg border border-gray-300 p-6">
             <p>
-              {mensagem || "Pedido não encontrado."}
+              {mensagem ||
+                "Pedido não encontrado."}
             </p>
 
             <Link
               href="/area-cliente"
               className="mt-4 inline-block rounded-lg bg-black px-5 py-3 font-semibold text-white"
             >
-              Voltar para área do cliente
+              Voltar para área do
+              cliente
             </Link>
           </div>
         </div>
@@ -236,6 +439,10 @@ export default function PedidoDetalhePage() {
   return (
     <main className="min-h-screen bg-white p-10 text-black">
       <div className="mx-auto max-w-3xl">
+        {/* =================================================
+            CABEÇALHO
+        ================================================= */}
+
         <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-start">
           <div>
             <p className="text-sm text-gray-500">
@@ -243,16 +450,22 @@ export default function PedidoDetalhePage() {
             </p>
 
             <h1 className="text-3xl font-bold">
-              Pedido nº {pedido.numero_pedido}
+              Pedido nº{" "}
+              {pedido.numero_pedido}
             </h1>
 
             <p className="mt-2 text-sm text-gray-500">
-              {formatarData(pedido.created_at)}
+              {formatarData(
+                pedido.created_at
+              )}
             </p>
           </div>
 
           <div className="rounded-full border border-gray-300 px-4 py-2 font-semibold">
-            Pagamento: {pedido.status_pagamento}
+            Pagamento:{" "}
+            {traduzirPagamento(
+              pedido.status_pagamento
+            )}
           </div>
         </div>
 
@@ -262,191 +475,425 @@ export default function PedidoDetalhePage() {
           </div>
         )}
 
-        {retiradas.length === 0 && (
+        {/* =================================================
+            SEM RETIRADA
+        ================================================= */}
+
+        {retiradas.length ===
+          0 && (
           <div className="mb-8 rounded-xl border border-orange-300 bg-orange-50 p-6">
             <p className="font-bold">
-              Retirada ainda não definida
+              Retirada ainda não
+              definida
             </p>
 
             <p className="mt-2 text-gray-600">
-              Estamos preparando as informações de retirada
+              Estamos preparando as
+              informações de retirada
               deste pedido.
             </p>
           </div>
         )}
 
+        {/* =================================================
+            RETIRADAS
+        ================================================= */}
+
         <div className="space-y-8">
-          {retiradas.map((retirada) => {
-            const unidade = retirada.unidades;
-            const ponto = retirada.pontos_retirada;
+          {retiradas.map(
+            (retirada) => {
+              const unidade =
+                retirada.unidades;
 
-            return (
-              <div
-                key={retirada.id}
-                className="rounded-2xl border border-gray-300 p-6"
-              >
-                <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
-                  <div>
-                    <p className="text-sm text-gray-500">
-                      Retirada {retirada.sequencia}
-                    </p>
+              const ponto =
+                retirada.pontos_retirada;
 
-                    <h2 className="mt-1 text-2xl font-bold">
-                      {unidade?.nome ??
-                        "Unidade O Box Driver"}
-                    </h2>
+              /*
+               * Seleciona somente os
+               * produtos desta retirada.
+               */
+              const produtosDestaRetirada =
+                itensRetirada.filter(
+                  (item) =>
+                    item.retirada_id ===
+                    retirada.id
+                );
 
-                    {unidade?.cidade && (
-                      <p className="mt-1 text-gray-500">
-                        {unidade.cidade}
-                        {unidade.estado
-                          ? ` - ${unidade.estado}`
-                          : ""}
+              return (
+                <div
+                  key={retirada.id}
+                  className="rounded-2xl border border-gray-300 p-6"
+                >
+                  {/* =====================================
+                      UNIDADE / STATUS
+                  ===================================== */}
+
+                  <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+                    <div>
+                      <p className="text-sm text-gray-500">
+                        Retirada{" "}
+                        {
+                          retirada.sequencia
+                        }
                       </p>
-                    )}
-                  </div>
 
-                  <span className="w-fit rounded-full border border-gray-300 px-4 py-2 font-semibold">
-                    {traduzirStatus(retirada.status)}
-                  </span>
-                </div>
+                      <h2 className="mt-1 text-2xl font-bold">
+                        {unidade?.nome ??
+                          "Unidade O Box Driver"}
+                      </h2>
 
-                {retirada.status === "recebido" && (
-                  <div className="mt-6 rounded-xl border border-gray-300 bg-gray-50 p-5">
-                    <p className="font-bold">
-                      Pedido recebido
-                    </p>
-
-                    <p className="mt-2 text-gray-600">
-                      Esta retirada será encaminhada para
-                      separação.
-                    </p>
-                  </div>
-                )}
-
-                {retirada.status === "em_separacao" && (
-                  <div className="mt-6 rounded-xl border border-blue-300 bg-blue-50 p-5">
-                    <p className="font-bold">
-                      Estamos separando seus produtos
-                    </p>
-
-                    <p className="mt-2 text-gray-600">
-                      Assim que a conferência terminar, o QR
-                      Code ficará disponível aqui.
-                    </p>
-                  </div>
-                )}
-
-                {retirada.status === "pronto_retirada" && (
-                  <div className="mt-6 rounded-2xl border-2 border-green-400 bg-green-50 p-8 text-center">
-                    <p className="text-sm font-semibold uppercase tracking-widest text-green-700">
-                      Retirada pronta
-                    </p>
-
-                    <h3 className="mt-2 text-2xl font-bold">
-                      Seus produtos estão prontos
-                    </h3>
-
-                    <p className="mt-3 text-gray-600">
-                      Ao chegar ao O Box Driver, apresente
-                      este QR Code no terminal de
-                      autoatendimento.
-                    </p>
-
-                    <div className="mt-8 flex justify-center">
-                      <div className="rounded-2xl border border-gray-300 bg-white p-6">
-                        <QRCodeSVG
-                          value={retirada.token_retirada}
-                          size={240}
-                          level="H"
-                          includeMargin
-                        />
-                      </div>
+                      {unidade?.cidade && (
+                        <p className="mt-1 text-gray-500">
+                          {
+                            unidade.cidade
+                          }
+                          {unidade.estado
+                            ? ` - ${unidade.estado}`
+                            : ""}
+                        </p>
+                      )}
                     </div>
 
-                    <p className="mt-6 font-semibold">
-                      Pedido nº {pedido.numero_pedido}
-                    </p>
+                    <span className="w-fit rounded-full border border-gray-300 px-4 py-2 font-semibold">
+                      {traduzirStatus(
+                        retirada.status
+                      )}
+                    </span>
+                  </div>
 
-                    <p className="mt-1 text-sm text-gray-500">
-                      Retirada {retirada.sequencia}
-                    </p>
+                  {/* =====================================
+                      PRODUTOS DESTA RETIRADA
+                  ===================================== */}
 
-                    {ponto && (
-                      <div className="mt-6 rounded-xl border border-green-300 bg-white p-5">
-                        <p className="text-sm text-gray-500">
-                          Ponto de retirada
-                        </p>
+                  {produtosDestaRetirada.length >
+                    0 && (
+                    <div className="mt-6 rounded-xl border border-gray-300 bg-gray-50 p-5">
+                      <p className="text-sm text-gray-500">
+                        Produtos desta
+                        retirada
+                      </p>
 
-                        <p className="mt-1 text-xl font-bold">
-                          {ponto.nome}
-                        </p>
+                      <div className="mt-4 space-y-3">
+                        {produtosDestaRetirada.map(
+                          (
+                            itemRetirada
+                          ) => {
+                            const produto =
+                              itemRetirada.itens_pedido;
 
-                        {ponto.instrucao_cliente && (
-                          <p className="mt-3 text-gray-600">
-                            {ponto.instrucao_cliente}
-                          </p>
+                            if (
+                              !produto
+                            ) {
+                              return null;
+                            }
+
+                            const subtotal =
+                              Number(
+                                produto.preco_unitario
+                              ) *
+                              Number(
+                                itemRetirada.quantidade
+                              );
+
+                            return (
+                              <div
+                                key={
+                                  itemRetirada.id
+                                }
+                                className="rounded-xl bg-white p-4"
+                              >
+                                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                                  <div>
+                                    <p className="font-bold">
+                                      {
+                                        produto.nome_produto
+                                      }
+                                    </p>
+
+                                    <p className="mt-1 text-sm text-gray-500">
+                                      Código:{" "}
+                                      {
+                                        produto.codigo_produto
+                                      }
+                                    </p>
+                                  </div>
+
+                                  <div className="sm:text-right">
+                                    <p className="text-sm text-gray-500">
+                                      Quantidade
+                                    </p>
+
+                                    <p className="text-xl font-bold">
+                                      {
+                                        itemRetirada.quantidade
+                                      }
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="mt-4 grid gap-3 border-t border-gray-200 pt-4 sm:grid-cols-2">
+                                  <div>
+                                    <p className="text-xs text-gray-500">
+                                      Preço
+                                      unitário
+                                    </p>
+
+                                    <p className="font-semibold">
+                                      {formatarValor(
+                                        produto.preco_unitario
+                                      )}
+                                    </p>
+                                  </div>
+
+                                  <div className="sm:text-right">
+                                    <p className="text-xs text-gray-500">
+                                      Valor
+                                      correspondente
+                                    </p>
+
+                                    <p className="font-semibold">
+                                      {formatarValor(
+                                        subtotal
+                                      )}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          }
                         )}
                       </div>
-                    )}
-                  </div>
-                )}
+                    </div>
+                  )}
 
-                {retirada.status === "cliente_no_local" && (
-                  <div className="mt-6 rounded-2xl border-2 border-orange-400 bg-orange-50 p-8 text-center">
-                    <p className="text-sm font-semibold uppercase tracking-widest text-orange-700">
-                      Check-in realizado
-                    </p>
+                  {/* =====================================
+                      RECEBIDO
+                  ===================================== */}
 
-                    <h3 className="mt-2 text-2xl font-bold">
-                      Identificamos sua chegada
-                    </h3>
-
-                    <p className="mt-3 text-lg">
-                      Siga a orientação exibida no terminal e
-                      dirija-se ao ponto de retirada.
-                    </p>
-
-                    {retirada.checkin_em && (
-                      <p className="mt-4 text-sm text-gray-500">
-                        Check-in:{" "}
-                        {formatarData(
-                          retirada.checkin_em
-                        )}
+                  {retirada.status ===
+                    "recebido" && (
+                    <div className="mt-6 rounded-xl border border-gray-300 bg-gray-50 p-5">
+                      <p className="font-bold">
+                        Pedido recebido
                       </p>
-                    )}
-                  </div>
-                )}
 
-                {retirada.status === "entregue" && (
-                  <div className="mt-6 rounded-2xl border-2 border-green-400 bg-green-50 p-8 text-center">
-                    <p className="text-sm font-semibold uppercase tracking-widest text-green-700">
-                      Retirada concluída
-                    </p>
+                      <p className="mt-2 text-gray-600">
+                        Esta retirada será
+                        encaminhada para
+                        separação.
+                      </p>
+                    </div>
+                  )}
 
-                    <h3 className="mt-2 text-2xl font-bold">
-                      Produtos entregues
-                    </h3>
+                  {/* =====================================
+                      EM SEPARAÇÃO
+                  ===================================== */}
 
-                    {retirada.entregue_em && (
+                  {retirada.status ===
+                    "em_separacao" && (
+                    <div className="mt-6 rounded-xl border border-blue-300 bg-blue-50 p-5">
+                      <p className="font-bold">
+                        Estamos separando
+                        seus produtos
+                      </p>
+
+                      <p className="mt-2 text-gray-600">
+                        Assim que a
+                        conferência
+                        terminar, o QR
+                        Code ficará
+                        disponível aqui.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* =====================================
+                      PRONTO PARA RETIRADA
+                  ===================================== */}
+
+                  {retirada.status ===
+                    "pronto_retirada" && (
+                    <div className="mt-6 rounded-2xl border-2 border-green-400 bg-green-50 p-8 text-center">
+                      <p className="text-sm font-semibold uppercase tracking-widest text-green-700">
+                        Retirada pronta
+                      </p>
+
+                      <h3 className="mt-2 text-2xl font-bold">
+                        Seus produtos
+                        estão prontos
+                      </h3>
+
                       <p className="mt-3 text-gray-600">
-                        Entregue em{" "}
-                        {formatarData(
-                          retirada.entregue_em
-                        )}
+                        Ao chegar ao O Box
+                        Driver, apresente
+                        este QR Code no
+                        terminal de
+                        autoatendimento
+                        desta unidade.
                       </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+
+                      <div className="mt-8 flex justify-center">
+                        <div className="rounded-2xl border border-gray-300 bg-white p-6">
+                          <QRCodeSVG
+                            value={
+                              retirada.token_retirada
+                            }
+                            size={240}
+                            level="H"
+                            includeMargin
+                          />
+                        </div>
+                      </div>
+
+                      <p className="mt-6 font-semibold">
+                        Pedido nº{" "}
+                        {
+                          pedido.numero_pedido
+                        }
+                      </p>
+
+                      <p className="mt-1 text-sm text-gray-500">
+                        Retirada{" "}
+                        {
+                          retirada.sequencia
+                        }
+                      </p>
+
+                      {unidade && (
+                        <p className="mt-2 font-semibold">
+                          {unidade.nome}
+                        </p>
+                      )}
+
+                      {ponto && (
+                        <div className="mt-6 rounded-xl border border-green-300 bg-white p-5">
+                          <p className="text-sm text-gray-500">
+                            Ponto de
+                            retirada
+                          </p>
+
+                          <p className="mt-1 text-xl font-bold">
+                            {
+                              ponto.nome
+                            }
+                          </p>
+
+                          {ponto.instrucao_cliente && (
+                            <p className="mt-3 text-gray-600">
+                              {
+                                ponto.instrucao_cliente
+                              }
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* =====================================
+                      CLIENTE NO LOCAL
+                  ===================================== */}
+
+                  {retirada.status ===
+                    "cliente_no_local" && (
+                    <div className="mt-6 rounded-2xl border-2 border-orange-400 bg-orange-50 p-8 text-center">
+                      <p className="text-sm font-semibold uppercase tracking-widest text-orange-700">
+                        Check-in
+                        realizado
+                      </p>
+
+                      <h3 className="mt-2 text-2xl font-bold">
+                        Identificamos sua
+                        chegada
+                      </h3>
+
+                      <p className="mt-3 text-lg">
+                        Siga a orientação
+                        exibida no
+                        terminal e
+                        dirija-se ao
+                        ponto de retirada.
+                      </p>
+
+                      {retirada.checkin_em && (
+                        <p className="mt-4 text-sm text-gray-500">
+                          Check-in:{" "}
+                          {formatarData(
+                            retirada.checkin_em
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* =====================================
+                      ENTREGUE
+                  ===================================== */}
+
+                  {retirada.status ===
+                    "entregue" && (
+                    <div className="mt-6 rounded-2xl border-2 border-green-400 bg-green-50 p-8 text-center">
+                      <p className="text-sm font-semibold uppercase tracking-widest text-green-700">
+                        Retirada
+                        concluída
+                      </p>
+
+                      <h3 className="mt-2 text-2xl font-bold">
+                        Produtos
+                        entregues
+                      </h3>
+
+                      {retirada.entregue_em && (
+                        <p className="mt-3 text-gray-600">
+                          Entregue em{" "}
+                          {formatarData(
+                            retirada.entregue_em
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* =====================================
+                      CANCELADO
+                  ===================================== */}
+
+                  {retirada.status ===
+                    "cancelado" && (
+                    <div className="mt-6 rounded-xl border border-red-300 bg-red-50 p-5">
+                      <p className="font-bold">
+                        Retirada
+                        cancelada
+                      </p>
+
+                      <p className="mt-2 text-gray-600">
+                        Esta retirada não
+                        está mais
+                        disponível.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+          )}
         </div>
 
+        {/* =================================================
+            RESUMO COMERCIAL
+        ================================================= */}
+
         <div className="mt-10 space-y-4">
-          <h2 className="text-2xl font-bold">
-            Itens do pedido
-          </h2>
+          <div>
+            <h2 className="text-2xl font-bold">
+              Resumo do pedido
+            </h2>
+
+            <p className="mt-1 text-sm text-gray-500">
+              Quantidades totais
+              compradas no pedido.
+            </p>
+          </div>
 
           {itens.map((item) => (
             <div
@@ -458,13 +905,14 @@ export default function PedidoDetalhePage() {
               </h3>
 
               <p className="mt-1 text-sm text-gray-500">
-                Código: {item.codigo_produto}
+                Código:{" "}
+                {item.codigo_produto}
               </p>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 <div>
                   <p className="text-sm text-gray-500">
-                    Quantidade
+                    Quantidade total
                   </p>
 
                   <p className="font-semibold">
@@ -500,13 +948,19 @@ export default function PedidoDetalhePage() {
           ))}
         </div>
 
+        {/* =================================================
+            TOTAL
+        ================================================= */}
+
         <div className="mt-8 rounded-xl border border-gray-300 p-6">
           <p className="text-sm text-gray-500">
             Total do pedido
           </p>
 
           <p className="mt-1 text-3xl font-bold">
-            {formatarValor(pedido.total)}
+            {formatarValor(
+              pedido.total
+            )}
           </p>
         </div>
 
@@ -514,7 +968,8 @@ export default function PedidoDetalhePage() {
           href="/area-cliente"
           className="mt-6 block w-full rounded-lg border border-gray-300 p-3 text-center font-semibold"
         >
-          Voltar para área do cliente
+          Voltar para área do
+          cliente
         </Link>
       </div>
     </main>
