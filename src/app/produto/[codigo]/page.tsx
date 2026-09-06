@@ -10,16 +10,19 @@ type Props = {
   }>;
 };
 
+type Unidade = {
+  id: string;
+  codigo: string;
+  nome: string;
+  cidade: string | null;
+  estado: string | null;
+  ativo: boolean;
+};
+
 type EstoqueUnidade = {
   quantidade: number;
 
-  unidades: {
-    codigo: string;
-    nome: string;
-    cidade: string | null;
-    estado: string | null;
-    ativo: boolean;
-  } | null;
+  unidades: Unidade | null;
 };
 
 type ProdutoDetalhe = {
@@ -35,10 +38,30 @@ type ProdutoDetalhe = {
   estoque_unidade: EstoqueUnidade[];
 };
 
+type DisponibilidadeUnidade = {
+  codigo: string;
+  nome: string;
+  cidade: string | null;
+  estado: string | null;
+  quantidade: number;
+};
+
 export default async function ProdutoPage({
   params,
 }: Props) {
   const { codigo } = await params;
+
+  /*
+   * =====================================================
+   * 1. CARREGA PRODUTO + ESTOQUE FÍSICO
+   * =====================================================
+   *
+   * estoque_unidade.quantidade representa estoque físico.
+   *
+   * Não usamos mais esse valor diretamente como
+   * disponibilidade comercial.
+   * =====================================================
+   */
 
   const { data, error } = await supabase
     .from("produtos")
@@ -56,6 +79,7 @@ export default async function ProdutoPage({
         quantidade,
 
         unidades (
+          id,
           codigo,
           nome,
           cidade,
@@ -88,8 +112,11 @@ export default async function ProdutoPage({
     data as unknown as ProdutoDetalhe;
 
   /*
-   * Consideramos somente unidades ativas.
+   * =====================================================
+   * 2. SOMENTE UNIDADES ATIVAS
+   * =====================================================
    */
+
   const estoquesAtivos =
     produto.estoque_unidade
       .filter(
@@ -114,42 +141,141 @@ export default async function ProdutoPage({
       });
 
   /*
-   * Estoque total disponível na rede.
+   * =====================================================
+   * 3. CONSULTA DISPONIBILIDADE REAL
+   * =====================================================
+   *
+   * disponibilidade =
+   * estoque físico
+   * -
+   * reservas ativas e não vencidas
+   *
+   * Essa regra permanece no PostgreSQL.
+   * =====================================================
    */
+
+  const disponibilidadesCalculadas =
+    await Promise.all(
+      estoquesAtivos.map(
+        async (
+          estoque
+        ): Promise<DisponibilidadeUnidade | null> => {
+          const unidade =
+            estoque.unidades;
+
+          if (!unidade) {
+            return null;
+          }
+
+          const {
+            data:
+              quantidadeDisponivel,
+            error:
+              disponibilidadeError,
+          } = await supabase.rpc(
+            "estoque_disponivel_unidade",
+            {
+              p_produto_id:
+                produto.id,
+
+              p_unidade_id:
+                unidade.id,
+            }
+          );
+
+          /*
+           * Segurança:
+           *
+           * se não conseguirmos validar as reservas,
+           * consideramos ZERO disponível.
+           *
+           * Nunca fazemos fallback para estoque físico.
+           */
+          if (
+            disponibilidadeError
+          ) {
+            console.error(
+              `Erro ao consultar disponibilidade do produto ${produto.codigo} na unidade ${unidade.codigo}:`,
+              disponibilidadeError.message
+            );
+
+            return {
+              codigo:
+                unidade.codigo,
+
+              nome:
+                unidade.nome,
+
+              cidade:
+                unidade.cidade,
+
+              estado:
+                unidade.estado,
+
+              quantidade: 0,
+            };
+          }
+
+          return {
+            codigo:
+              unidade.codigo,
+
+            nome:
+              unidade.nome,
+
+            cidade:
+              unidade.cidade,
+
+            estado:
+              unidade.estado,
+
+            quantidade:
+              Math.max(
+                0,
+                Number(
+                  quantidadeDisponivel ??
+                    0
+                )
+              ),
+          };
+        }
+      )
+    );
+
+  const disponibilidade =
+    disponibilidadesCalculadas.filter(
+      (
+        item
+      ): item is DisponibilidadeUnidade =>
+        item !== null
+    );
+
+  /*
+   * =====================================================
+   * 4. ESTOQUE TOTAL DISPONÍVEL NA REDE
+   * =====================================================
+   */
+
   const estoqueTotal =
-    estoquesAtivos.reduce(
-      (total, estoque) =>
+    disponibilidade.reduce(
+      (
+        total,
+        estoque
+      ) =>
         total +
-        Number(estoque.quantidade),
+        Number(
+          estoque.quantidade
+        ),
       0
     );
 
   /*
-   * Estrutura que enviaremos para o componente
-   * de quantidade/carrinho.
+   * Mantemos todas as unidades ativas na tela,
+   * inclusive as que estão com disponibilidade 0.
+   *
+   * Isso deixa claro para o cliente que a unidade existe,
+   * mas naquele momento não possui quantidade disponível.
    */
-  const disponibilidade =
-    estoquesAtivos
-      .filter(
-        (estoque) =>
-          estoque.unidades !== null
-      )
-      .map((estoque) => ({
-        codigo:
-          estoque.unidades!.codigo,
-
-        nome:
-          estoque.unidades!.nome,
-
-        cidade:
-          estoque.unidades!.cidade,
-
-        estado:
-          estoque.unidades!.estado,
-
-        quantidade:
-          Number(estoque.quantidade),
-      }));
 
   return (
     <main className="min-h-screen bg-white p-10 text-black">
@@ -169,10 +295,13 @@ export default async function ProdutoPage({
         <p className="mt-8 text-3xl font-bold">
           {Number(
             produto.preco
-          ).toLocaleString("pt-BR", {
-            style: "currency",
-            currency: "BRL",
-          })}
+          ).toLocaleString(
+            "pt-BR",
+            {
+              style: "currency",
+              currency: "BRL",
+            }
+          )}
         </p>
 
         <div className="mt-6 rounded-xl border border-gray-300 p-5">
@@ -198,54 +327,68 @@ export default async function ProdutoPage({
           </p>
 
           <div className="mt-5 space-y-3">
-            {estoquesAtivos.map(
-              (estoque) => {
-                const unidade =
-                  estoque.unidades;
+            {disponibilidade.map(
+              (estoque) => (
+                <div
+                  key={
+                    estoque.codigo
+                  }
+                  className="flex items-center justify-between gap-5 rounded-xl bg-gray-50 p-4"
+                >
+                  <div>
+                    <p className="font-semibold">
+                      {
+                        estoque.nome
+                      }
+                    </p>
 
-                if (!unidade) {
-                  return null;
-                }
+                    {estoque.cidade && (
+                      <p className="mt-1 text-sm text-gray-500">
+                        {
+                          estoque.cidade
+                        }
 
-                return (
-                  <div
-                    key={unidade.codigo}
-                    className="flex items-center justify-between gap-5 rounded-xl bg-gray-50 p-4"
-                  >
-                    <div>
-                      <p className="font-semibold">
-                        {unidade.nome}
+                        {estoque.estado
+                          ? ` - ${estoque.estado}`
+                          : ""}
                       </p>
-
-                      {unidade.cidade && (
-                        <p className="mt-1 text-sm text-gray-500">
-                          {unidade.cidade}
-                          {unidade.estado
-                            ? ` - ${unidade.estado}`
-                            : ""}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="text-right">
-                      <p className="text-xl font-bold">
-                        {estoque.quantidade}
-                      </p>
-
-                      <p className="text-xs text-gray-500">
-                        disponíveis
-                      </p>
-                    </div>
+                    )}
                   </div>
-                );
-              }
+
+                  <div className="text-right">
+                    <p
+                      className={`text-xl font-bold ${
+                        estoque.quantidade <=
+                        0
+                          ? "text-red-600"
+                          : ""
+                      }`}
+                    >
+                      {
+                        estoque.quantidade
+                      }
+                    </p>
+
+                    <p className="text-xs text-gray-500">
+                      disponíveis
+                    </p>
+                  </div>
+                </div>
+              )
             )}
           </div>
 
           {estoqueTotal <= 0 && (
-            <p className="mt-4 font-semibold text-red-600">
-              Produto indisponível em toda a rede.
-            </p>
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
+              <p className="font-semibold text-red-600">
+                Produto indisponível em toda a rede.
+              </p>
+
+              <p className="mt-1 text-sm text-gray-600">
+                O estoque pode estar temporariamente
+                reservado por outros clientes.
+              </p>
+            </div>
           )}
         </div>
 
@@ -253,15 +396,21 @@ export default async function ProdutoPage({
           produto={{
             id: produto.id,
             nome: produto.nome,
-            preco: Number(produto.preco),
-            codigo: produto.codigo,
+            preco:
+              Number(
+                produto.preco
+              ),
+            codigo:
+              produto.codigo,
 
             /*
-             * A propriedade estoque continua existindo
-             * temporariamente no carrinho, mas agora
-             * representa o TOTAL DA REDE.
+             * Agora estoque representa
+             * DISPONIBILIDADE REAL da rede.
+             *
+             * Não mais estoque físico.
              */
-            estoque: estoqueTotal,
+            estoque:
+              estoqueTotal,
 
             disponibilidade,
           }}

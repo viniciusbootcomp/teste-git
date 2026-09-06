@@ -17,8 +17,8 @@ type ProdutoCarrinho = {
   codigo: string;
 
   /*
-   * Agora estoque representa o estoque
-   * total disponível na rede.
+   * Estoque representa a disponibilidade
+   * REAL atual em toda a rede.
    */
   estoque: number;
 
@@ -48,22 +48,18 @@ export default function AdicionarCarrinho({
     useState("");
 
   /*
-   * Calcula uma sugestão de distribuição.
+   * =====================================================
+   * SUGESTÃO DE DISTRIBUIÇÃO
+   * =====================================================
    *
-   * Nesta etapa priorizamos utilizar o menor
-   * número possível de unidades.
+   * Utilizamos primeiro as unidades que possuem
+   * maior disponibilidade.
    *
-   * Para isso, usamos primeiro as unidades
-   * que possuem maior quantidade disponível.
-   *
-   * Futuramente poderemos considerar também:
-   *
-   * - distância do cliente;
-   * - preferência do cliente;
-   * - horário;
-   * - franqueado;
-   * - capacidade operacional.
+   * Dessa maneira tentamos atender o cliente com
+   * o menor número possível de pontos de retirada.
+   * =====================================================
    */
+
   const distribuicao =
     useMemo<Distribuicao[]>(() => {
       if (
@@ -111,6 +107,13 @@ export default function AdicionarCarrinho({
         }
       }
 
+      /*
+       * Segurança:
+       *
+       * se por alguma inconsistência a soma das
+       * unidades não conseguir atender a quantidade,
+       * não mostramos distribuição.
+       */
       if (restante > 0) {
         return [];
       }
@@ -122,7 +125,15 @@ export default function AdicionarCarrinho({
       produto.estoque,
     ]);
 
+  /*
+   * =====================================================
+   * CONTROLES DA QUANTIDADE
+   * =====================================================
+   */
+
   function aumentar() {
+    setMensagem("");
+
     if (
       quantidade <
       produto.estoque
@@ -134,6 +145,8 @@ export default function AdicionarCarrinho({
   }
 
   function diminuir() {
+    setMensagem("");
+
     if (quantidade > 1) {
       setQuantidade(
         quantidade - 1
@@ -144,6 +157,8 @@ export default function AdicionarCarrinho({
   function alterarQuantidade(
     valor: string
   ) {
+    setMensagem("");
+
     const novaQuantidade =
       Number(valor);
 
@@ -168,6 +183,10 @@ export default function AdicionarCarrinho({
         produto.estoque
       );
 
+      setMensagem(
+        `A rede possui ${produto.estoque} unidade(s) disponíveis neste momento.`
+      );
+
       return;
     }
 
@@ -176,20 +195,74 @@ export default function AdicionarCarrinho({
     );
   }
 
+  /*
+   * =====================================================
+   * ADICIONA / ATUALIZA CARRINHO
+   * =====================================================
+   *
+   * IMPORTANTE:
+   *
+   * "Quantidade desejada" representa a quantidade TOTAL
+   * que o cliente deseja comprar.
+   *
+   * Portanto:
+   *
+   * carrinho tinha 5
+   * cliente escolheu 20
+   * → carrinho passa para 20
+   *
+   * Não fazemos:
+   *
+   * 5 + 20 = 25
+   * =====================================================
+   */
+
   function adicionar() {
     setMensagem("");
+
+    if (
+      quantidade <= 0
+    ) {
+      setMensagem(
+        "Informe uma quantidade válida."
+      );
+
+      return;
+    }
+
+    if (
+      quantidade >
+      produto.estoque
+    ) {
+      setMensagem(
+        `Quantidade indisponível. A rede possui ${produto.estoque} unidade(s) disponíveis neste momento.`
+      );
+
+      return;
+    }
+
+    let carrinho: ItemCarrinho[] =
+      [];
 
     const carrinhoSalvo =
       localStorage.getItem(
         "carrinho"
       );
 
-    const carrinho: ItemCarrinho[] =
-      carrinhoSalvo
-        ? JSON.parse(
+    if (carrinhoSalvo) {
+      try {
+        carrinho =
+          JSON.parse(
             carrinhoSalvo
-          )
-        : [];
+          ) as ItemCarrinho[];
+      } catch {
+        /*
+         * Se o conteúdo estiver corrompido,
+         * reconstruímos o carrinho.
+         */
+        carrinho = [];
+      }
+    }
 
     const itemExistente =
       carrinho.find(
@@ -198,68 +271,77 @@ export default function AdicionarCarrinho({
       );
 
     if (itemExistente) {
-      const novaQuantidade =
-        Number(
-          itemExistente.quantidade
-        ) + quantidade;
-
-      if (
-        novaQuantidade >
-        produto.estoque
-      ) {
-        setMensagem(
-          `Quantidade indisponível. A rede possui ${produto.estoque} unidade(s) disponíveis neste momento.`
-        );
-
-        return;
-      }
-
       /*
-       * Atualizamos também as informações
-       * atuais de disponibilidade.
+       * Produto já está no carrinho.
        *
-       * Isso serve apenas para UX.
-       *
-       * O checkout NÃO confiará nesses dados.
-       * O servidor recalculará o estoque.
+       * Substituímos pela quantidade desejada
+       * informada nesta tela.
        */
       itemExistente.quantidade =
-        novaQuantidade;
+        quantidade;
+
+      /*
+       * Atualizamos também os dados atuais
+       * utilizados pela interface.
+       *
+       * O checkout NÃO confia nesses dados.
+       * O servidor valida novamente estoque,
+       * preço e distribuição.
+       */
+      itemExistente.nome =
+        produto.nome;
+
+      itemExistente.preco =
+        produto.preco;
+
+      itemExistente.codigo =
+        produto.codigo;
 
       itemExistente.estoque =
         produto.estoque;
 
       itemExistente.disponibilidade =
         produto.disponibilidade;
-    } else {
-      if (
-        quantidade >
-        produto.estoque
-      ) {
-        setMensagem(
-          `Quantidade indisponível. A rede possui ${produto.estoque} unidade(s) disponíveis neste momento.`
-        );
 
-        return;
-      }
+      localStorage.setItem(
+        "carrinho",
+        JSON.stringify(
+          carrinho
+        )
+      );
 
-      carrinho.push({
-        ...produto,
-        quantidade,
-      });
+      setMensagem(
+        `Carrinho atualizado para ${quantidade} unidade(s).`
+      );
+
+      return;
     }
+
+    /*
+     * Produto ainda não existe no carrinho.
+     */
+    carrinho.push({
+      ...produto,
+      quantidade,
+    });
 
     localStorage.setItem(
       "carrinho",
-      JSON.stringify(carrinho)
+      JSON.stringify(
+        carrinho
+      )
     );
 
     setMensagem(
       `${quantidade} unidade(s) adicionada(s) ao carrinho.`
     );
-
-    setQuantidade(1);
   }
+
+  /*
+   * =====================================================
+   * SEM ESTOQUE
+   * =====================================================
+   */
 
   if (produto.estoque <= 0) {
     return (
@@ -270,6 +352,11 @@ export default function AdicionarCarrinho({
         >
           Produto sem estoque
         </button>
+
+        <p className="mt-3 text-sm text-gray-500">
+          Não há unidades disponíveis para venda neste
+          momento.
+        </p>
       </div>
     );
   }
@@ -284,7 +371,10 @@ export default function AdicionarCarrinho({
         <button
           type="button"
           onClick={diminuir}
-          className="h-11 w-11 rounded-lg border border-gray-300 text-xl font-bold"
+          disabled={
+            quantidade <= 1
+          }
+          className="h-11 w-11 rounded-lg border border-gray-300 text-xl font-bold disabled:cursor-not-allowed disabled:opacity-40"
         >
           -
         </button>
@@ -305,7 +395,11 @@ export default function AdicionarCarrinho({
         <button
           type="button"
           onClick={aumentar}
-          className="h-11 w-11 rounded-lg border border-gray-300 text-xl font-bold"
+          disabled={
+            quantidade >=
+            produto.estoque
+          }
+          className="h-11 w-11 rounded-lg border border-gray-300 text-xl font-bold disabled:cursor-not-allowed disabled:opacity-40"
         >
           +
         </button>
@@ -315,6 +409,10 @@ export default function AdicionarCarrinho({
           {produto.estoque}
         </span>
       </div>
+
+      {/* =================================================
+          DISTRIBUIÇÃO SUGERIDA
+      ================================================= */}
 
       {distribuicao.length > 0 && (
         <div className="mb-5 rounded-2xl border border-gray-300 bg-gray-50 p-5">
@@ -328,7 +426,8 @@ export default function AdicionarCarrinho({
             </p>
           ) : (
             <p className="mt-1 font-bold">
-              Para atender esta quantidade serão necessários{" "}
+              Para atender esta quantidade serão
+              necessários{" "}
               {distribuicao.length} pontos de retirada
             </p>
           )}
@@ -341,17 +440,24 @@ export default function AdicionarCarrinho({
                   quantidadeDistribuida,
               }) => (
                 <div
-                  key={unidade.codigo}
+                  key={
+                    unidade.codigo
+                  }
                   className="flex items-center justify-between gap-5 rounded-xl bg-white p-4"
                 >
                   <div>
                     <p className="font-semibold">
-                      {unidade.nome}
+                      {
+                        unidade.nome
+                      }
                     </p>
 
                     {unidade.cidade && (
                       <p className="mt-1 text-sm text-gray-500">
-                        {unidade.cidade}
+                        {
+                          unidade.cidade
+                        }
+
                         {unidade.estado
                           ? ` - ${unidade.estado}`
                           : ""}
@@ -377,14 +483,18 @@ export default function AdicionarCarrinho({
 
           {distribuicao.length > 1 && (
             <p className="mt-4 text-sm text-gray-500">
-              Esta é uma sugestão inicial. A distribuição
-              definitiva será confirmada no checkout de
-              acordo com o estoque disponível naquele
-              momento.
+              Esta é uma sugestão inicial. A
+              distribuição definitiva será confirmada
+              no checkout de acordo com o estoque
+              disponível naquele momento.
             </p>
           )}
         </div>
       )}
+
+      {/* =================================================
+          ADICIONAR / ATUALIZAR
+      ================================================= */}
 
       <button
         type="button"
