@@ -759,23 +759,13 @@ export async function POST(
          * Não gravamos o token do cartão no banco nem no log.
          */
         console.error(
-          "ERRO MERCADO PAGO CARTÃO:",
-          {
-            http_status:
-              respostaMercadoPago.status,
-
-            retorno:
-              respostaSeguraMercadoPago(
-                order
-              ),
-
-            error:
-              order.error ?? null,
-
-            message:
-              order.message ?? null,
-          }
-        );
+  "ERRO MERCADO PAGO CARTÃO - RESPOSTA COMPLETA:",
+  JSON.stringify(
+    order,
+    null,
+    2
+  )
+);
 
         await supabaseAdmin
           .from(

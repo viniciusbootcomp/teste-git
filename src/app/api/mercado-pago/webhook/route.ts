@@ -16,6 +16,14 @@ type MercadoPagoPayment = {
   id?: string;
   status?: string;
   status_detail?: string;
+  amount?: string | number;
+  paid_amount?: string | number;
+
+  payment_method?: {
+    id?: string;
+    type?: string;
+    installments?: number;
+  };
 };
 
 type MercadoPagoOrder = {
@@ -23,6 +31,8 @@ type MercadoPagoOrder = {
   status?: string;
   status_detail?: string;
   external_reference?: string;
+  total_amount?: string | number;
+  total_paid_amount?: string | number;
 
   transactions?: {
     payments?: MercadoPagoPayment[];
@@ -47,17 +57,25 @@ type CorpoWebhook = {
 
 /*
  * =========================================================
- * DIAGNÓSTICO MANUAL DA ASSINATURA
+ * VALIDAÇÃO MANUAL DA ASSINATURA
  * =========================================================
  *
- * Formato:
+ * Formato do manifest:
  *
  * id:<data.id>;
  * request-id:<x-request-id>;
  * ts:<ts>;
  *
- * IMPORTANTE:
- * não alteramos maiúsculas/minúsculas do data.id.
+ * Em notificações reais de Orders no sandbox observamos
+ * que o Mercado Pago pode assinar usando data.id em
+ * lowercase mesmo quando a query/body chegam em maiúsculas.
+ *
+ * Por isso validamos:
+ *
+ * - data.id exatamente como recebido
+ * - data.id normalizado para lowercase
+ *
+ * O secret nunca é logado.
  * =========================================================
  */
 
@@ -67,18 +85,45 @@ function extrairPartesAssinatura(
   let ts = "";
   let v1 = "";
 
-  for (const parte of xSignature.split(",")) {
-    const indice = parte.indexOf("=");
-    if (indice === -1) continue;
+  for (
+    const parte of
+    xSignature.split(",")
+  ) {
+    const indice =
+      parte.indexOf("=");
 
-    const chave = parte.substring(0, indice).trim();
-    const valor = parte.substring(indice + 1).trim();
+    if (indice === -1) {
+      continue;
+    }
 
-    if (chave === "ts") ts = valor;
-    if (chave === "v1") v1 = valor;
+    const chave =
+      parte
+        .substring(
+          0,
+          indice
+        )
+        .trim();
+
+    const valor =
+      parte
+        .substring(
+          indice + 1
+        )
+        .trim();
+
+    if (chave === "ts") {
+      ts = valor;
+    }
+
+    if (chave === "v1") {
+      v1 = valor;
+    }
   }
 
-  return { ts, v1 };
+  return {
+    ts,
+    v1,
+  };
 }
 
 function calcularHmac({
@@ -97,23 +142,50 @@ function calcularHmac({
     `request-id:${xRequestId};` +
     `ts:${ts};`;
 
-  const calculado = crypto
-    .createHmac("sha256", secret)
-    .update(manifest, "utf8")
-    .digest("hex");
-
-  return { manifest, calculado };
+  return crypto
+    .createHmac(
+      "sha256",
+      secret
+    )
+    .update(
+      manifest,
+      "utf8"
+    )
+    .digest(
+      "hex"
+    );
 }
 
-function hashesIguais(recebido: string, calculado: string) {
-  const recebidoBuffer = Buffer.from(recebido.toLowerCase(), "utf8");
-  const calculadoBuffer = Buffer.from(calculado.toLowerCase(), "utf8");
+function hashesIguais(
+  recebido: string,
+  calculado: string
+) {
+  const recebidoBuffer =
+    Buffer.from(
+      recebido.toLowerCase(),
+      "utf8"
+    );
 
-  if (recebidoBuffer.length !== calculadoBuffer.length) return false;
-  return crypto.timingSafeEqual(recebidoBuffer, calculadoBuffer);
+  const calculadoBuffer =
+    Buffer.from(
+      calculado.toLowerCase(),
+      "utf8"
+    );
+
+  if (
+    recebidoBuffer.length !==
+    calculadoBuffer.length
+  ) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(
+    recebidoBuffer,
+    calculadoBuffer
+  );
 }
 
-function diagnosticarAssinatura({
+function validarHmacManual({
   xSignature,
   xRequestId,
   dataId,
@@ -124,42 +196,61 @@ function diagnosticarAssinatura({
   dataId: string;
   secret: string;
 }) {
-  const { ts, v1 } = extrairPartesAssinatura(xSignature);
+  const {
+    ts,
+    v1,
+  } =
+    extrairPartesAssinatura(
+      xSignature
+    );
 
-  if (!ts || !v1) {
+  if (
+    !ts ||
+    !v1
+  ) {
     return {
       valido: false,
-      motivo: "x-signature sem ts ou v1",
-      ts,
-      v1,
-      manifest: null,
-      calculado: null,
-      candidatos: [],
+      exatoValido: false,
+      lowercaseValido: false,
     };
   }
 
-  const exato = calcularHmac({ dataId, xRequestId, ts, secret });
-  const dataIdLower = dataId.toLowerCase();
-  const lower = calcularHmac({ dataId: dataIdLower, xRequestId, ts, secret });
-  const secretTrimmed = secret.trim();
-  const exatoSecretTrimmed = calcularHmac({ dataId, xRequestId, ts, secret: secretTrimmed });
-  const lowerSecretTrimmed = calcularHmac({ dataId: dataIdLower, xRequestId, ts, secret: secretTrimmed });
+  const exato =
+    calcularHmac({
+      dataId,
+      xRequestId,
+      ts,
+      secret,
+    });
 
-  const valido = hashesIguais(v1, exato.calculado);
+  const lowercase =
+    calcularHmac({
+      dataId:
+        dataId.toLowerCase(),
+      xRequestId,
+      ts,
+      secret,
+    });
+
+  const exatoValido =
+    hashesIguais(
+      v1,
+      exato
+    );
+
+  const lowercaseValido =
+    hashesIguais(
+      v1,
+      lowercase
+    );
 
   return {
-    valido,
-    motivo: valido ? "HMAC manual válido" : "HMAC manual diferente",
-    ts,
-    v1,
-    manifest: exato.manifest,
-    calculado: exato.calculado,
-    candidatos: [
-      { nome: "data.id EXATO + secret EXATO", manifest: exato.manifest, calculado: exato.calculado, bate: hashesIguais(v1, exato.calculado) },
-      { nome: "data.id lowercase + secret EXATO", manifest: lower.manifest, calculado: lower.calculado, bate: hashesIguais(v1, lower.calculado) },
-      { nome: "data.id EXATO + secret trim()", manifest: exatoSecretTrimmed.manifest, calculado: exatoSecretTrimmed.calculado, bate: hashesIguais(v1, exatoSecretTrimmed.calculado) },
-      { nome: "data.id lowercase + secret trim()", manifest: lowerSecretTrimmed.manifest, calculado: lowerSecretTrimmed.calculado, bate: hashesIguais(v1, lowerSecretTrimmed.calculado) },
-    ],
+    valido:
+      exatoValido ||
+      lowercaseValido,
+
+    exatoValido,
+    lowercaseValido,
   };
 }
 
@@ -282,43 +373,15 @@ export async function POST(
       );
 
     console.log(
-      "WEBHOOK MERCADO PAGO:",
+      "WEBHOOK MERCADO PAGO RECEBIDO",
       {
         data_id:
           dataId,
-
-        data_id_query:
-          Boolean(
-            dataIdQuery
-          ),
-
-        data_id_body:
-          Boolean(
-            dataIdBody
-          ),
-
-        external_reference:
-          externalReferenceNotificacao,
-
         tipo,
-
         live_mode:
           corpo.live_mode,
-
-        tem_signature:
-          Boolean(
-            xSignature
-          ),
-
-        tem_request_id:
-          Boolean(
-            xRequestId
-          ),
-
-        tem_secret:
-          Boolean(
-            webhookSecret
-          ),
+        external_reference:
+          externalReferenceNotificacao,
       }
     );
 
@@ -343,12 +406,12 @@ export async function POST(
 
     /*
      * =====================================================
-     * 4. DIAGNÓSTICO MANUAL
+     * 4. HMAC MANUAL
      * =====================================================
      */
 
-    const diagnostico =
-      diagnosticarAssinatura({
+    const hmacManual =
+      validarHmacManual({
         xSignature,
         xRequestId,
         dataId,
@@ -357,41 +420,16 @@ export async function POST(
       });
 
     /*
-     * Não mostramos secret completo.
-     *
-     * Também mostramos somente pedaços do HMAC.
-     */
-    console.log(
-      "DIAGNÓSTICO HMAC MERCADO PAGO:",
-      {
-        manual_valido: diagnostico.valido,
-        motivo: diagnostico.motivo,
-        data_id_exato: dataId,
-        data_id_lowercase: dataId.toLowerCase(),
-        data_id_tem_maiusculas: dataId !== dataId.toLowerCase(),
-        data_id_query_valor: dataIdQuery,
-        data_id_body_valor: dataIdBody,
-        query_e_body_iguais:
-          dataIdQuery && dataIdBody ? dataIdQuery === dataIdBody : null,
-        x_request_id: xRequestId,
-        x_signature: xSignature,
-        timestamp: diagnostico.ts,
-        v1_recebido: diagnostico.v1,
-        secret_tamanho: webhookSecret.length,
-        secret_tamanho_trim: webhookSecret.trim().length,
-        secret_tem_espacos_externos: webhookSecret !== webhookSecret.trim(),
-        candidatos: diagnostico.candidatos,
-      }
-    );
-
-    /*
      * =====================================================
-     * 5. VALIDAÇÃO PELO SDK OFICIAL
+     * 5. SDK OFICIAL
      * =====================================================
      */
 
-    let sdkValido = false;
-    let sdkValidoLowercase = false;
+    let sdkValido =
+      false;
+
+    let sdkLowercaseValido =
+      false;
 
     try {
       WebhookSignatureValidator.validate({
@@ -402,20 +440,15 @@ export async function POST(
           webhookSecret,
       });
 
-      sdkValido = true;
-
-      console.log(
-        "SDK Mercado Pago: assinatura válida."
-      );
+      sdkValido =
+        true;
     } catch (error) {
       if (
-        error instanceof
-        InvalidWebhookSignatureError
+        !(
+          error instanceof
+          InvalidWebhookSignatureError
+        )
       ) {
-        console.warn(
-          "SDK Mercado Pago: assinatura considerada inválida."
-        );
-      } else {
         console.error(
           "Erro inesperado no SDK ao validar assinatura:",
           error
@@ -433,64 +466,78 @@ export async function POST(
     }
 
     /*
-     * Diagnóstico adicional: tenta o SDK com data.id em lowercase.
-     * NÃO usamos este resultado para autorizar o webhook.
+     * Orders sandbox:
+     * também tentamos lowercase porque notificações reais
+     * já demonstraram usar essa normalização no HMAC.
      */
-    if (dataId !== dataId.toLowerCase()) {
+    if (
+      !sdkValido &&
+      dataId !==
+        dataId.toLowerCase()
+    ) {
       try {
         WebhookSignatureValidator.validate({
           xSignature,
           xRequestId,
-          dataId: dataId.toLowerCase(),
-          secret: webhookSecret,
+          dataId:
+            dataId.toLowerCase(),
+          secret:
+            webhookSecret,
         });
 
-        sdkValidoLowercase = true;
-        console.warn("DIAGNÓSTICO: SDK validou quando data.id foi enviado em lowercase.");
+        sdkLowercaseValido =
+          true;
       } catch (error) {
-        if (!(error instanceof InvalidWebhookSignatureError)) {
-          console.error("Erro inesperado no diagnóstico SDK lowercase:", error);
+        if (
+          !(
+            error instanceof
+            InvalidWebhookSignatureError
+          )
+        ) {
+          console.error(
+            "Erro inesperado no SDK lowercase:",
+            error
+          );
+
+          return NextResponse.json(
+            {
+              sucesso: false,
+            },
+            {
+              status: 500,
+            }
+          );
         }
       }
     }
 
     /*
      * =====================================================
-     * 6. RESULTADO DAS DUAS VALIDAÇÕES
+     * 6. RESULTADO
      * =====================================================
      */
 
-    console.log(
-      "RESULTADO VALIDAÇÃO WEBHOOK:",
-      {
-        sdk_valido:
-          sdkValido,
+    const assinaturaValida =
+      sdkValido ||
+      sdkLowercaseValido ||
+      hmacManual.valido;
 
-        sdk_valido_lowercase_diagnostico:
-          sdkValidoLowercase,
-
-        hmac_manual_valido:
-          diagnostico.valido,
-      }
-    );
-
-    /*
-     * Segurança:
-     *
-     * para continuar, pelo menos uma validação precisa
-     * confirmar corretamente o HMAC.
-     *
-     * Se SDK e cálculo manual rejeitarem, devolvemos 401.
-     */
-    if (
-      !sdkValido &&
-      !diagnostico.valido
-    ) {
+    if (!assinaturaValida) {
       console.error(
-        "Webhook Mercado Pago rejeitado: SDK e HMAC manual não conferem.",
+        "Webhook Mercado Pago rejeitado: assinatura inválida.",
         {
-          sdk_lowercase_diagnostico: sdkValidoLowercase,
-          algum_candidato_manual_bate: diagnostico.candidatos.some((candidato) => candidato.bate),
+          data_id:
+            dataId,
+          sdk:
+            sdkValido,
+          sdk_lowercase:
+            sdkLowercaseValido,
+          hmac_exato:
+            hmacManual
+              .exatoValido,
+          hmac_lowercase:
+            hmacManual
+              .lowercaseValido,
         }
       );
 
@@ -504,21 +551,20 @@ export async function POST(
       );
     }
 
-    /*
-     * Se o cálculo oficial manual bateu, mas o SDK não,
-     * registramos claramente.
-     */
-    if (
-      !sdkValido &&
-      diagnostico.valido
-    ) {
-      console.warn(
-        "ATENÇÃO: HMAC manual válido, mas SDK rejeitou."
-      );
-    }
-
     console.log(
-      "Assinatura Mercado Pago aceita."
+      "Assinatura Mercado Pago válida.",
+      {
+        sdk:
+          sdkValido,
+        sdk_lowercase:
+          sdkLowercaseValido,
+        hmac_exato:
+          hmacManual
+            .exatoValido,
+        hmac_lowercase:
+          hmacManual
+            .lowercaseValido,
+      }
     );
 
     /*
@@ -701,20 +747,43 @@ export async function POST(
 
     /*
      * =====================================================
-     * 11. SOMENTE FLUXO PIX DO O BOX DRIVER
+     * 11. FLUXOS O BOX DRIVER
+     * =====================================================
+     *
+     * PIX:
+     *   obox_pix_...
+     *
+     * Cartão de crédito:
+     *   obox_cc_...
      * =====================================================
      */
 
-    if (
-      !externalReference ||
-      !externalReference
-        .toLowerCase()
+    const externalReferenceLower =
+      externalReference
+        ?.toLowerCase() ??
+      "";
+
+    const fluxoPix =
+      externalReferenceLower
         .startsWith(
           "obox_pix_"
-        )
+        );
+
+    const fluxoCartaoCredito =
+      externalReferenceLower
+        .startsWith(
+          "obox_cc_"
+        );
+
+    if (
+      !externalReference ||
+      (
+        !fluxoPix &&
+        !fluxoCartaoCredito
+      )
     ) {
-      console.warn(
-        "Order não pertence ao fluxo PIX do O Box Driver:",
+      console.log(
+        "Order ignorada: não pertence ao O Box Driver.",
         {
           orderId,
           externalReference,
@@ -810,7 +879,144 @@ export async function POST(
 
     /*
      * =====================================================
-     * 13. CONFERE ORDER LOCAL
+     * 13. VALIDA MÉTODO E VALOR
+     * =====================================================
+     *
+     * O body do webhook não é fonte de verdade.
+     * Usamos a Order consultada diretamente no Mercado Pago.
+     * =====================================================
+     */
+
+    if (!pagamentoMP) {
+      console.error(
+        "Order sem pagamento interno.",
+        {
+          orderId,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          sucesso: false,
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    const metodoId =
+      pagamentoMP
+        .payment_method
+        ?.id ??
+      null;
+
+    const metodoTipo =
+      pagamentoMP
+        .payment_method
+        ?.type ??
+      null;
+
+    if (
+      pagamento.metodo ===
+        "pix" &&
+      (
+        metodoId !==
+          "pix" ||
+        metodoTipo !==
+          "bank_transfer"
+      )
+    ) {
+      console.error(
+        "Método do webhook não corresponde ao PIX local.",
+        {
+          orderId,
+          metodoId,
+          metodoTipo,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          sucesso: false,
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    if (
+      pagamento.metodo ===
+        "credit_card" &&
+      metodoTipo !==
+        "credit_card"
+    ) {
+      console.error(
+        "Método do webhook não corresponde ao cartão de crédito local.",
+        {
+          orderId,
+          metodoId,
+          metodoTipo,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          sucesso: false,
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    const valorLocal =
+      Number(
+        pagamento.valor
+      );
+
+    const valorOrder =
+      Number(
+        order.total_amount ??
+        pagamentoMP.amount ??
+        0
+      );
+
+    if (
+      !Number.isFinite(
+        valorLocal
+      ) ||
+      !Number.isFinite(
+        valorOrder
+      ) ||
+      Math.abs(
+        valorLocal -
+        valorOrder
+      ) > 0.009
+    ) {
+      console.error(
+        "Valor do webhook não corresponde ao pagamento local.",
+        {
+          orderId,
+          valorLocal,
+          valorOrder,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          sucesso: false,
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    /*
+     * =====================================================
+     * 14. CONFERE ORDER LOCAL
      * =====================================================
      */
 
@@ -842,7 +1048,7 @@ export async function POST(
 
     /*
      * =====================================================
-     * 14. ATUALIZA IDENTIFICADORES
+     * 15. ATUALIZA IDENTIFICADORES
      * =====================================================
      */
 
@@ -897,17 +1103,24 @@ export async function POST(
 
     /*
      * =====================================================
-     * 15. PAGAMENTO APROVADO
+     * 16. PAGAMENTO APROVADO
      * =====================================================
      */
 
+    const pagamentoAprovado =
+      (
+        statusOrder ===
+          "processed" &&
+        statusPagamento ===
+          "processed" &&
+        statusDetail ===
+          "accredited"
+      ) ||
+      statusPagamento ===
+        "approved";
+
     if (
-      statusPagamento ===
-        "approved" ||
-      statusPagamento ===
-        "processed" ||
-      statusOrder ===
-        "processed"
+      pagamentoAprovado
     ) {
       /*
        * Idempotência.
@@ -1061,7 +1274,9 @@ export async function POST(
       );
 
       console.log(
-        "PIX MERCADO PAGO APROVADO"
+        fluxoPix
+          ? "PIX MERCADO PAGO APROVADO"
+          : "CARTÃO DE CRÉDITO MERCADO PAGO APROVADO"
       );
 
       console.log(
@@ -1090,7 +1305,7 @@ export async function POST(
 
     /*
      * =====================================================
-     * 16. PENDENTE
+     * 17. PENDENTE
      * =====================================================
      */
 
@@ -1154,7 +1369,9 @@ export async function POST(
       }
 
       console.log(
-        "PIX ainda aguardando pagamento.",
+        fluxoPix
+          ? "PIX ainda aguardando pagamento."
+          : "Cartão ainda em processamento.",
         {
           orderId,
           statusPagamento,
@@ -1175,7 +1392,7 @@ export async function POST(
 
     /*
      * =====================================================
-     * 17. RECUSADO / CANCELADO / EXPIRADO
+     * 18. RECUSADO / CANCELADO / EXPIRADO
      * =====================================================
      */
 
@@ -1382,7 +1599,7 @@ export async function POST(
 
     /*
      * =====================================================
-     * 18. STATUS NÃO MAPEADO
+     * 19. STATUS NÃO MAPEADO
      * =====================================================
      */
 
