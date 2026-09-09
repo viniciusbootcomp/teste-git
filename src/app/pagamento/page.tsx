@@ -37,10 +37,32 @@ type ItemReserva = {
   } | null;
 };
 
-type RespostaPagamentoLab = {
+type RespostaPix = {
   sucesso: boolean;
-  numero_pedido?: number;
+  erro?: string;
   mensagem?: string;
+  valor?: number | string;
+  order_id?: string;
+  payment_id?: string;
+  status?: string;
+  status_detail?: string;
+  qr_code?: string;
+  qr_code_base64?: string;
+  ticket_url?: string;
+  expira_em?: string;
+};
+
+type RespostaReconciliacao = {
+  sucesso: boolean;
+  aprovado?: boolean;
+  ja_processado?: boolean;
+  numero_pedido?: number;
+  pedido_id?: string;
+  erro?: string;
+  mensagem?: string;
+  order_status?: string;
+  payment_status?: string;
+  status_detail?: string;
 };
 
 export default function PagamentoPage() {
@@ -64,6 +86,18 @@ export default function PagamentoPage() {
 
   const [mensagem, setMensagem] =
     useState("");
+
+  const [pix, setPix] =
+    useState<RespostaPix | null>(null);
+
+  const [gerandoPix, setGerandoPix] =
+    useState(false);
+
+  const [conciliando, setConciliando] =
+    useState(false);
+
+  const [copiado, setCopiado] =
+    useState(false);
 
   const [
     segundosRestantes,
@@ -360,38 +394,219 @@ export default function PagamentoPage() {
 
   /*
    * =====================================================
-   * SIMULA PAGAMENTO APROVADO
-   * =====================================================
-   *
-   * IMPORTANTE:
-   *
-   * O navegador NÃO chama mais diretamente:
-   *
-   * converter_reserva_em_pedido()
-   *
-   * Agora o fluxo é:
-   *
-   * navegador
-   * ↓
-   * /api/lab/pagamento-aprovado
-   * ↓
-   * service_role
-   * ↓
-   * converter_reserva_em_pedido()
-   *
-   * Quando Mercado Pago entrar, esta rota de laboratório
-   * será substituída pelo fluxo real do gateway/webhook.
+   * FINALIZAÇÃO LOCAL APÓS PAGAMENTO CONFIRMADO
    * =====================================================
    */
 
-  async function simularPagamentoAprovado() {
+  const concluirPagamento =
+    useCallback(
+      async (
+        numeroPedido?: number,
+        pedidoId?: string
+      ) => {
+        let numeroFinal =
+          numeroPedido;
+
+        if (
+          !numeroFinal &&
+          pedidoId
+        ) {
+          const {
+            data: pedidoData,
+            error: pedidoError,
+          } = await supabase
+            .from("pedidos")
+            .select("numero_pedido")
+            .eq("id", pedidoId)
+            .maybeSingle();
+
+          if (
+            !pedidoError &&
+            pedidoData?.numero_pedido
+          ) {
+            numeroFinal =
+              Number(
+                pedidoData.numero_pedido
+              );
+          }
+        }
+
+        localStorage.removeItem(
+          "carrinho"
+        );
+
+        localStorage.removeItem(
+          "reserva_pagamento"
+        );
+
+        if (numeroFinal) {
+          router.push(
+            `/pedido-sucesso?numero=${numeroFinal}`
+          );
+          return;
+        }
+
+        router.push(
+          "/area-cliente"
+        );
+      },
+      [router]
+    );
+
+  /*
+   * =====================================================
+   * RECONCILIA PIX COM O MERCADO PAGO
+   * =====================================================
+   */
+
+  const reconciliarPix =
+    useCallback(
+      async (
+        silencioso = false
+      ): Promise<boolean> => {
+        if (
+          !reservaId ||
+          conciliando
+        ) {
+          return false;
+        }
+
+        setConciliando(true);
+
+        try {
+          const {
+            data: sessionData,
+            error: sessionError,
+          } =
+            await supabase.auth.getSession();
+
+          if (
+            sessionError ||
+            !sessionData.session
+          ) {
+            if (!silencioso) {
+              setMensagem(
+                "Sua sessão expirou. Entre novamente para continuar."
+              );
+            }
+            return false;
+          }
+
+          const resposta =
+            await fetch(
+              "/api/mercado-pago/reconciliar-pix",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                  Authorization:
+                    `Bearer ${sessionData.session.access_token}`,
+                },
+                body:
+                  JSON.stringify({
+                    reserva_id:
+                      reservaId,
+                  }),
+              }
+            );
+
+          let resultado:
+            RespostaReconciliacao;
+
+          try {
+            resultado =
+              (await resposta.json()) as RespostaReconciliacao;
+          } catch {
+            if (!silencioso) {
+              setMensagem(
+                "O servidor retornou uma resposta inválida ao verificar o PIX."
+              );
+            }
+            return false;
+          }
+
+          if (
+            resposta.status === 404
+          ) {
+            return false;
+          }
+
+          if (
+            !resposta.ok ||
+            !resultado.sucesso
+          ) {
+            if (!silencioso) {
+              setMensagem(
+                resultado.erro ??
+                  resultado.mensagem ??
+                  "Não foi possível verificar o pagamento."
+              );
+            }
+            return false;
+          }
+
+          if (
+            resultado.aprovado ||
+            resultado.ja_processado
+          ) {
+            setMensagem(
+              "Pagamento aprovado! Seu pedido foi criado com sucesso."
+            );
+
+            await concluirPagamento(
+              resultado.numero_pedido,
+              resultado.pedido_id
+            );
+
+            return true;
+          }
+
+          if (!silencioso) {
+            setMensagem(
+              "PIX gerado. Aguardando a confirmação do pagamento pelo Mercado Pago."
+            );
+          }
+
+          return false;
+        } catch (error) {
+          console.error(
+            "Erro ao verificar PIX:",
+            error
+          );
+
+          if (!silencioso) {
+            setMensagem(
+              "Não foi possível consultar o pagamento neste momento. Tentaremos novamente automaticamente."
+            );
+          }
+
+          return false;
+        } finally {
+          setConciliando(false);
+        }
+      },
+      [
+        reservaId,
+        conciliando,
+        concluirPagamento,
+      ]
+    );
+
+  /*
+   * =====================================================
+   * GERA PIX REAL NO MERCADO PAGO
+   * =====================================================
+   */
+
+  async function gerarPix() {
     setMensagem("");
+    setCopiado(false);
 
     if (!reserva) {
       setMensagem(
         "Reserva não carregada."
       );
-
       return;
     }
 
@@ -402,7 +617,6 @@ export default function PagamentoPage() {
       setMensagem(
         `A reserva está com status "${reserva.status}".`
       );
-
       return;
     }
 
@@ -412,186 +626,174 @@ export default function PagamentoPage() {
       setMensagem(
         "O prazo da reserva terminou. Volte ao carrinho e tente novamente."
       );
-
       return;
     }
 
     if (
+      gerandoPix ||
       processando
     ) {
       return;
     }
 
+    setGerandoPix(true);
     setProcessando(true);
 
     try {
-      /*
-       * ===================================================
-       * CHAMADA AO NOSSO BACKEND
-       * ===================================================
-       */
-
       const {
-  data: sessionData,
-  error: sessionError,
-} =
-  await supabase.auth.getSession();
+        data: sessionData,
+        error: sessionError,
+      } =
+        await supabase.auth.getSession();
 
-if (
-  sessionError ||
-  !sessionData.session
-) {
-  setMensagem(
-    "Sua sessão expirou. Entre novamente para continuar."
-  );
-
-  setProcessando(false);
-  return;
-}
-
-const accessToken =
-  sessionData.session.access_token;
-
-const resposta =
-  await fetch(
-    "/api/lab/pagamento-aprovado",
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type":
-          "application/json",
-
-        Authorization:
-          `Bearer ${accessToken}`,
-      },
-
-      body:
-        JSON.stringify({
-          reserva_id:
-            reserva.id,
-        }),
-    }
-  );
-
-      let resultado:
-        RespostaPagamentoLab;
-
-      try {
-        resultado =
-          (await resposta.json()) as RespostaPagamentoLab;
-      } catch {
+      if (
+        sessionError ||
+        !sessionData.session
+      ) {
         setMensagem(
-          "O servidor retornou uma resposta inválida."
+          "Sua sessão expirou. Entre novamente para continuar."
         );
-
-        setProcessando(false);
         return;
       }
 
-      /*
-       * ===================================================
-       * ERRO DO BACKEND
-       * ===================================================
-       */
+      const resposta =
+        await fetch(
+          "/api/mercado-pago/pix",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+              Authorization:
+                `Bearer ${sessionData.session.access_token}`,
+            },
+            body:
+              JSON.stringify({
+                reserva_id:
+                  reserva.id,
+              }),
+          }
+        );
+
+      let resultado:
+        RespostaPix;
+
+      try {
+        resultado =
+          (await resposta.json()) as RespostaPix;
+      } catch {
+        setMensagem(
+          "O servidor retornou uma resposta inválida ao gerar o PIX."
+        );
+        return;
+      }
 
       if (
         !resposta.ok ||
         !resultado.sucesso
       ) {
-        /*
-         * Recarregamos a reserva porque pode ter ocorrido
-         * mudança de status no banco.
-         */
-        await carregarReserva();
-
         setMensagem(
-          resultado.mensagem ??
-            "Não foi possível confirmar o pagamento."
+          resultado.erro ??
+            resultado.mensagem ??
+            "Não foi possível gerar o PIX."
         );
-
-        setProcessando(false);
         return;
       }
 
-      /*
-       * ===================================================
-       * PEDIDO CRIADO
-       * ===================================================
-       */
-
-      const numeroPedido =
-        resultado.numero_pedido;
-
-      if (
-        numeroPedido ===
-          null ||
-        numeroPedido ===
-          undefined
-      ) {
-        setMensagem(
-          "Pagamento confirmado, mas o número do pedido não foi retornado."
-        );
-
-        setProcessando(false);
-        return;
-      }
-
-      /*
-       * ===================================================
-       * LIMPEZA LOCAL
-       * ===================================================
-       *
-       * Só limpamos o carrinho depois que o backend
-       * confirmou a conversão da reserva em pedido.
-       * ===================================================
-       */
-
-      localStorage.removeItem(
-        "carrinho"
+      setPix(
+        resultado
       );
 
-      localStorage.removeItem(
-        "reserva_pagamento"
-      );
-
-      /*
-       * ===================================================
-       * REDIRECIONA PARA SUCESSO
-       * ===================================================
-       */
-
-      router.push(
-        `/pedido-sucesso?numero=${numeroPedido}`
-      );
-    } catch (error) {
-      /*
-       * ===================================================
-       * FALHA DE REDE / NAVEGADOR
-       * ===================================================
-       *
-       * Aqui existe uma possibilidade importante:
-       *
-       * o backend pode ter convertido a reserva,
-       * mas a resposta pode ter se perdido.
-       *
-       * Portanto recarregamos a reserva antes de
-       * simplesmente permitir nova tentativa.
-       * ===================================================
-       */
-
-      console.error(
-        "Erro de comunicação ao confirmar pagamento:",
-        error
+      setMensagem(
+        "PIX criado. Faça o pagamento usando o QR Code ou o código Copia e Cola."
       );
 
       await carregarReserva();
 
-      setMensagem(
-        "Houve uma falha de comunicação. O status da reserva foi atualizado; confira antes de tentar novamente."
+      window.setTimeout(
+        () => {
+          void reconciliarPix(
+            true
+          );
+        },
+        1500
+      );
+    } catch (error) {
+      console.error(
+        "Erro ao gerar PIX:",
+        error
       );
 
+      setMensagem(
+        "Houve uma falha de comunicação ao gerar o PIX. Tente novamente."
+      );
+    } finally {
+      setGerandoPix(false);
       setProcessando(false);
+    }
+  }
+
+  /*
+   * =====================================================
+   * POLLING DE SEGURANÇA
+   * =====================================================
+   */
+
+  useEffect(() => {
+    if (
+      !pix ||
+      !reserva ||
+      reserva.status !==
+        "ativa" ||
+      reservaExpirada
+    ) {
+      return;
+    }
+
+    const intervalo =
+      window.setInterval(
+        () => {
+          void reconciliarPix(
+            true
+          );
+        },
+        4000
+      );
+
+    return () => {
+      window.clearInterval(
+        intervalo
+      );
+    };
+  }, [
+    pix,
+    reserva,
+    reservaExpirada,
+    reconciliarPix,
+  ]);
+
+  async function copiarPix() {
+    if (!pix?.qr_code) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        pix.qr_code
+      );
+
+      setCopiado(true);
+
+      window.setTimeout(
+        () => {
+          setCopiado(false);
+        },
+        2000
+      );
+    } catch {
+      setMensagem(
+        "Não foi possível copiar automaticamente. Selecione o código PIX e copie manualmente."
+      );
     }
   }
 
@@ -911,37 +1113,133 @@ const resposta =
 
               <div className="mt-6 rounded-xl border border-blue-300 bg-blue-50 p-4">
                 <p className="font-bold">
-                  Ambiente de laboratório
+                  PIX Mercado Pago
                 </p>
 
                 <p className="mt-2 text-sm text-gray-600">
-                  O Mercado Pago ainda não está conectado.
-                </p>
-
-                <p className="mt-2 text-sm text-gray-600">
-                  A simulação agora passa pelo backend,
-                  exatamente como acontecerá com a
-                  confirmação real do pagamento.
+                  Gere o PIX e conclua o pagamento. A confirmação
+                  será verificada automaticamente pelo O Box Driver.
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={
-                  simularPagamentoAprovado
-                }
-                disabled={
-                  processando ||
-                  reservaExpirada ||
-                  reservaConvertida ||
-                  reservaCancelada
-                }
-                className="mt-6 w-full rounded-xl bg-black p-4 text-lg font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-400"
-              >
-                {processando
-                  ? "Confirmando pagamento..."
-                  : "Simular pagamento aprovado"}
-              </button>
+              {!pix ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void gerarPix()
+                  }
+                  disabled={
+                    gerandoPix ||
+                    processando ||
+                    reservaExpirada ||
+                    reservaConvertida ||
+                    reservaCancelada
+                  }
+                  className="mt-6 w-full rounded-xl bg-black p-4 text-lg font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-400"
+                >
+                  {gerandoPix
+                    ? "Gerando PIX..."
+                    : "Gerar PIX"}
+                </button>
+              ) : (
+                <div className="mt-6 space-y-5">
+                  <div className="rounded-xl border border-green-300 bg-green-50 p-4">
+                    <p className="font-bold text-green-800">
+                      PIX criado
+                    </p>
+
+                    <p className="mt-1 text-sm text-gray-600">
+                      Aguardando confirmação do Mercado Pago.
+                    </p>
+
+                    {conciliando && (
+                      <p className="mt-2 text-xs text-gray-500">
+                        Verificando pagamento...
+                      </p>
+                    )}
+                  </div>
+
+                  {pix.qr_code_base64 && (
+                    <div className="text-center">
+                      <p className="mb-3 font-semibold">
+                        QR Code
+                      </p>
+
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={
+                          pix.qr_code_base64.startsWith(
+                            "data:"
+                          )
+                            ? pix.qr_code_base64
+                            : `data:image/png;base64,${pix.qr_code_base64}`
+                        }
+                        alt="QR Code PIX"
+                        className="mx-auto max-w-64 rounded-xl border border-gray-200 p-3"
+                      />
+                    </div>
+                  )}
+
+                  {pix.qr_code && (
+                    <div>
+                      <p className="mb-2 font-semibold">
+                        PIX Copia e Cola
+                      </p>
+
+                      <textarea
+                        readOnly
+                        value={
+                          pix.qr_code
+                        }
+                        rows={5}
+                        className="w-full resize-none rounded-xl border border-gray-300 p-3 text-sm"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void copiarPix()
+                        }
+                        className="mt-2 w-full rounded-xl border border-gray-300 p-3 font-semibold"
+                      >
+                        {copiado
+                          ? "Código copiado!"
+                          : "Copiar código PIX"}
+                      </button>
+                    </div>
+                  )}
+
+                  {pix.ticket_url && (
+                    <a
+                      href={
+                        pix.ticket_url
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block w-full rounded-xl border border-gray-300 p-3 text-center font-semibold"
+                    >
+                      Abrir página PIX do Mercado Pago
+                    </a>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void reconciliarPix(
+                        false
+                      )
+                    }
+                    disabled={
+                      conciliando
+                    }
+                    className="w-full rounded-xl bg-black p-3 font-semibold text-white disabled:bg-gray-400"
+                  >
+                    {conciliando
+                      ? "Verificando pagamento..."
+                      : "Já paguei — verificar agora"}
+                  </button>
+                </div>
+              )}
 
               {reserva.status ===
                 "ativa" &&

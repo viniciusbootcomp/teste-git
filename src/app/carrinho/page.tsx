@@ -854,12 +854,40 @@ export default function CarrinhoPage() {
   }
 
   async function limparCarrinho() {
+    if (alterandoCarrinho) {
+      return;
+    }
+
+    const confirmou = window.confirm(
+      reservaPropriaAtiva
+        ? "Tem certeza que deseja limpar o carrinho? A reserva de estoque atual será cancelada e os produtos voltarão a ficar disponíveis."
+        : "Tem certeza que deseja limpar o carrinho?"
+    );
+
+    if (!confirmou) {
+      return;
+    }
+
+    setErroValidacao("");
+
     const podeAlterar =
       await cancelarReservaAntesDeAlterar();
 
     if (!podeAlterar) {
       return;
     }
+
+    /*
+     * Limpa qualquer referência local antiga da reserva,
+     * inclusive nos casos em que ela já expirou no banco.
+     */
+    localStorage.removeItem(
+      "reserva_pagamento"
+    );
+
+    setReservaPropriaAtiva(
+      null
+    );
 
     salvarCarrinho([]);
   }
@@ -1277,7 +1305,9 @@ export default function CarrinhoPage() {
                 }
                 className="mt-3 w-full rounded-lg border border-gray-300 p-3 font-semibold disabled:opacity-40"
               >
-                Limpar carrinho
+                {alterandoCarrinho
+                  ? "Limpando carrinho..."
+                  : "Limpar carrinho"}
               </button>
 
               <Link

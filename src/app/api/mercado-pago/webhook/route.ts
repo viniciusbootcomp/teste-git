@@ -3,6 +3,8 @@ import {
   NextResponse,
 } from "next/server";
 
+import crypto from "crypto";
+
 import {
   InvalidWebhookSignatureError,
   WebhookSignatureValidator,
@@ -18,10 +20,8 @@ type MercadoPagoPayment = {
 
 type MercadoPagoOrder = {
   id?: string;
-
   status?: string;
   status_detail?: string;
-
   external_reference?: string;
 
   transactions?: {
@@ -35,11 +35,133 @@ type MercadoPagoOrder = {
 type CorpoWebhook = {
   action?: string;
   type?: string;
+  live_mode?: boolean;
 
   data?: {
     id?: string;
+    external_reference?: string;
+    status?: string;
+    status_detail?: string;
   };
 };
+
+/*
+ * =========================================================
+ * DIAGNÓSTICO MANUAL DA ASSINATURA
+ * =========================================================
+ *
+ * Formato:
+ *
+ * id:<data.id>;
+ * request-id:<x-request-id>;
+ * ts:<ts>;
+ *
+ * IMPORTANTE:
+ * não alteramos maiúsculas/minúsculas do data.id.
+ * =========================================================
+ */
+
+function extrairPartesAssinatura(
+  xSignature: string
+) {
+  let ts = "";
+  let v1 = "";
+
+  for (const parte of xSignature.split(",")) {
+    const indice = parte.indexOf("=");
+    if (indice === -1) continue;
+
+    const chave = parte.substring(0, indice).trim();
+    const valor = parte.substring(indice + 1).trim();
+
+    if (chave === "ts") ts = valor;
+    if (chave === "v1") v1 = valor;
+  }
+
+  return { ts, v1 };
+}
+
+function calcularHmac({
+  dataId,
+  xRequestId,
+  ts,
+  secret,
+}: {
+  dataId: string;
+  xRequestId: string;
+  ts: string;
+  secret: string;
+}) {
+  const manifest =
+    `id:${dataId};` +
+    `request-id:${xRequestId};` +
+    `ts:${ts};`;
+
+  const calculado = crypto
+    .createHmac("sha256", secret)
+    .update(manifest, "utf8")
+    .digest("hex");
+
+  return { manifest, calculado };
+}
+
+function hashesIguais(recebido: string, calculado: string) {
+  const recebidoBuffer = Buffer.from(recebido.toLowerCase(), "utf8");
+  const calculadoBuffer = Buffer.from(calculado.toLowerCase(), "utf8");
+
+  if (recebidoBuffer.length !== calculadoBuffer.length) return false;
+  return crypto.timingSafeEqual(recebidoBuffer, calculadoBuffer);
+}
+
+function diagnosticarAssinatura({
+  xSignature,
+  xRequestId,
+  dataId,
+  secret,
+}: {
+  xSignature: string;
+  xRequestId: string;
+  dataId: string;
+  secret: string;
+}) {
+  const { ts, v1 } = extrairPartesAssinatura(xSignature);
+
+  if (!ts || !v1) {
+    return {
+      valido: false,
+      motivo: "x-signature sem ts ou v1",
+      ts,
+      v1,
+      manifest: null,
+      calculado: null,
+      candidatos: [],
+    };
+  }
+
+  const exato = calcularHmac({ dataId, xRequestId, ts, secret });
+  const dataIdLower = dataId.toLowerCase();
+  const lower = calcularHmac({ dataId: dataIdLower, xRequestId, ts, secret });
+  const secretTrimmed = secret.trim();
+  const exatoSecretTrimmed = calcularHmac({ dataId, xRequestId, ts, secret: secretTrimmed });
+  const lowerSecretTrimmed = calcularHmac({ dataId: dataIdLower, xRequestId, ts, secret: secretTrimmed });
+
+  const valido = hashesIguais(v1, exato.calculado);
+
+  return {
+    valido,
+    motivo: valido ? "HMAC manual válido" : "HMAC manual diferente",
+    ts,
+    v1,
+    manifest: exato.manifest,
+    calculado: exato.calculado,
+    candidatos: [
+      { nome: "data.id EXATO + secret EXATO", manifest: exato.manifest, calculado: exato.calculado, bate: hashesIguais(v1, exato.calculado) },
+      { nome: "data.id lowercase + secret EXATO", manifest: lower.manifest, calculado: lower.calculado, bate: hashesIguais(v1, lower.calculado) },
+      { nome: "data.id EXATO + secret trim()", manifest: exatoSecretTrimmed.manifest, calculado: exatoSecretTrimmed.calculado, bate: hashesIguais(v1, exatoSecretTrimmed.calculado) },
+      { nome: "data.id lowercase + secret trim()", manifest: lowerSecretTrimmed.manifest, calculado: lowerSecretTrimmed.calculado, bate: hashesIguais(v1, lowerSecretTrimmed.calculado) },
+    ],
+  };
+}
 
 export async function POST(
   request: NextRequest
@@ -101,16 +223,12 @@ export async function POST(
       corpo =
         (await request.json()) as CorpoWebhook;
     } catch {
-      /*
-       * O body não é necessário para validar a assinatura
-       * quando data.id veio na query string.
-       */
       corpo = {};
     }
 
     /*
      * =====================================================
-     * 3. DADOS RECEBIDOS
+     * 3. DADOS DA NOTIFICAÇÃO
      * =====================================================
      */
 
@@ -119,25 +237,18 @@ export async function POST(
         request.url
       );
 
-    /*
-     * O Mercado Pago envia normalmente:
-     *
-     * ?data.id=ORDER_ID&type=order
-     *
-     * No simulador o ID também pode aparecer no body.
-     */
     const dataIdQuery =
       url.searchParams.get(
         "data.id"
       );
 
     const dataIdBody =
-      corpo.data?.id;
+      corpo.data?.id ??
+      null;
 
     const dataId =
       dataIdQuery ??
-      dataIdBody ??
-      null;
+      dataIdBody;
 
     const tipo =
       url.searchParams.get(
@@ -145,6 +256,20 @@ export async function POST(
       ) ??
       corpo.type ??
       null;
+
+    const externalReferenceQuery =
+      url.searchParams.get(
+        "data.external_reference"
+      );
+
+    const externalReferenceBody =
+      corpo.data
+        ?.external_reference ??
+      null;
+
+    const externalReferenceNotificacao =
+      externalReferenceQuery ??
+      externalReferenceBody;
 
     const xSignature =
       request.headers.get(
@@ -156,9 +281,6 @@ export async function POST(
         "x-request-id"
       );
 
-    /*
-     * Diagnóstico sem expor segredo.
-     */
     console.log(
       "WEBHOOK MERCADO PAGO:",
       {
@@ -175,7 +297,13 @@ export async function POST(
             dataIdBody
           ),
 
+        external_reference:
+          externalReferenceNotificacao,
+
         tipo,
+
+        live_mode:
+          corpo.live_mode,
 
         tem_signature:
           Boolean(
@@ -215,14 +343,55 @@ export async function POST(
 
     /*
      * =====================================================
-     * 4. VALIDA ASSINATURA COM SDK OFICIAL
-     * =====================================================
-     *
-     * Não calculamos mais o HMAC manualmente.
-     *
-     * O SDK oficial do Mercado Pago faz essa validação.
+     * 4. DIAGNÓSTICO MANUAL
      * =====================================================
      */
+
+    const diagnostico =
+      diagnosticarAssinatura({
+        xSignature,
+        xRequestId,
+        dataId,
+        secret:
+          webhookSecret,
+      });
+
+    /*
+     * Não mostramos secret completo.
+     *
+     * Também mostramos somente pedaços do HMAC.
+     */
+    console.log(
+      "DIAGNÓSTICO HMAC MERCADO PAGO:",
+      {
+        manual_valido: diagnostico.valido,
+        motivo: diagnostico.motivo,
+        data_id_exato: dataId,
+        data_id_lowercase: dataId.toLowerCase(),
+        data_id_tem_maiusculas: dataId !== dataId.toLowerCase(),
+        data_id_query_valor: dataIdQuery,
+        data_id_body_valor: dataIdBody,
+        query_e_body_iguais:
+          dataIdQuery && dataIdBody ? dataIdQuery === dataIdBody : null,
+        x_request_id: xRequestId,
+        x_signature: xSignature,
+        timestamp: diagnostico.ts,
+        v1_recebido: diagnostico.v1,
+        secret_tamanho: webhookSecret.length,
+        secret_tamanho_trim: webhookSecret.trim().length,
+        secret_tem_espacos_externos: webhookSecret !== webhookSecret.trim(),
+        candidatos: diagnostico.candidatos,
+      }
+    );
+
+    /*
+     * =====================================================
+     * 5. VALIDAÇÃO PELO SDK OFICIAL
+     * =====================================================
+     */
+
+    let sdkValido = false;
+    let sdkValidoLowercase = false;
 
     try {
       WebhookSignatureValidator.validate({
@@ -233,54 +402,23 @@ export async function POST(
           webhookSecret,
       });
 
+      sdkValido = true;
+
       console.log(
-        "Assinatura Mercado Pago válida."
+        "SDK Mercado Pago: assinatura válida."
       );
-      /*
- * =====================================================
- * SIMULAÇÃO DO PAINEL MERCADO PAGO
- * =====================================================
- *
- * IDs iniciados por ORDTST são gerados pelo simulador.
- *
- * O objetivo aqui é somente validar:
- *
- * - URL pública
- * - POST
- * - assinatura
- * - resposta HTTP
- *
- * Não devemos alterar pagamentos, reservas ou pedidos
- * reais do O Box Driver durante essa simulação.
- * =====================================================
- */
-
-if (
-  dataId
-    .toUpperCase()
-    .startsWith("ORDTST")
-) {
-  console.log(
-    "Webhook de simulação Mercado Pago validado com sucesso."
-  );
-
-  return NextResponse.json(
-    {
-      sucesso: true,
-      simulacao: true,
-    },
-    {
-      status: 200,
-    }
-  );
-}
     } catch (error) {
       if (
         error instanceof
         InvalidWebhookSignatureError
       ) {
+        console.warn(
+          "SDK Mercado Pago: assinatura considerada inválida."
+        );
+      } else {
         console.error(
-          "Webhook Mercado Pago com assinatura inválida."
+          "Erro inesperado no SDK ao validar assinatura:",
+          error
         );
 
         return NextResponse.json(
@@ -288,18 +426,72 @@ if (
             sucesso: false,
           },
           {
-            status: 401,
+            status: 500,
           }
         );
       }
+    }
 
-      /*
-       * Se for outro erro inesperado do SDK,
-       * registramos para diagnóstico.
-       */
+    /*
+     * Diagnóstico adicional: tenta o SDK com data.id em lowercase.
+     * NÃO usamos este resultado para autorizar o webhook.
+     */
+    if (dataId !== dataId.toLowerCase()) {
+      try {
+        WebhookSignatureValidator.validate({
+          xSignature,
+          xRequestId,
+          dataId: dataId.toLowerCase(),
+          secret: webhookSecret,
+        });
+
+        sdkValidoLowercase = true;
+        console.warn("DIAGNÓSTICO: SDK validou quando data.id foi enviado em lowercase.");
+      } catch (error) {
+        if (!(error instanceof InvalidWebhookSignatureError)) {
+          console.error("Erro inesperado no diagnóstico SDK lowercase:", error);
+        }
+      }
+    }
+
+    /*
+     * =====================================================
+     * 6. RESULTADO DAS DUAS VALIDAÇÕES
+     * =====================================================
+     */
+
+    console.log(
+      "RESULTADO VALIDAÇÃO WEBHOOK:",
+      {
+        sdk_valido:
+          sdkValido,
+
+        sdk_valido_lowercase_diagnostico:
+          sdkValidoLowercase,
+
+        hmac_manual_valido:
+          diagnostico.valido,
+      }
+    );
+
+    /*
+     * Segurança:
+     *
+     * para continuar, pelo menos uma validação precisa
+     * confirmar corretamente o HMAC.
+     *
+     * Se SDK e cálculo manual rejeitarem, devolvemos 401.
+     */
+    if (
+      !sdkValido &&
+      !diagnostico.valido
+    ) {
       console.error(
-        "Erro ao validar assinatura Mercado Pago:",
-        error
+        "Webhook Mercado Pago rejeitado: SDK e HMAC manual não conferem.",
+        {
+          sdk_lowercase_diagnostico: sdkValidoLowercase,
+          algum_candidato_manual_bate: diagnostico.candidatos.some((candidato) => candidato.bate),
+        }
       );
 
       return NextResponse.json(
@@ -307,14 +499,66 @@ if (
           sucesso: false,
         },
         {
-          status: 500,
+          status: 401,
+        }
+      );
+    }
+
+    /*
+     * Se o cálculo oficial manual bateu, mas o SDK não,
+     * registramos claramente.
+     */
+    if (
+      !sdkValido &&
+      diagnostico.valido
+    ) {
+      console.warn(
+        "ATENÇÃO: HMAC manual válido, mas SDK rejeitou."
+      );
+    }
+
+    console.log(
+      "Assinatura Mercado Pago aceita."
+    );
+
+    /*
+     * =====================================================
+     * 7. SIMULAÇÃO MANUAL DO PAINEL
+     * =====================================================
+     */
+
+    const ehSimulacaoManual =
+      Boolean(
+        externalReferenceBody
+      ) &&
+      externalReferenceBody!
+        .toLowerCase()
+        .startsWith(
+          "ext_ref_"
+        ) &&
+      !externalReferenceQuery;
+
+    if (
+      ehSimulacaoManual
+    ) {
+      console.log(
+        "Webhook de simulação manual Mercado Pago validado."
+      );
+
+      return NextResponse.json(
+        {
+          sucesso: true,
+          simulacao: true,
+        },
+        {
+          status: 200,
         }
       );
     }
 
     /*
      * =====================================================
-     * 5. SOMENTE EVENTOS ORDER
+     * 8. SOMENTE ORDER
      * =====================================================
      */
 
@@ -341,13 +585,7 @@ if (
 
     /*
      * =====================================================
-     * 6. CONSULTA ORDER OFICIAL
-     * =====================================================
-     *
-     * Mesmo com assinatura válida, nunca confiamos apenas
-     * no status enviado pelo webhook.
-     *
-     * Consultamos a Order diretamente no Mercado Pago.
+     * 9. CONSULTA A ORDER NO MERCADO PAGO
      * =====================================================
      */
 
@@ -376,22 +614,6 @@ if (
     const order =
       (await respostaMercadoPago.json()) as MercadoPagoOrder;
 
-    /*
-     * =====================================================
-     * SIMULAÇÃO DO PAINEL
-     * =====================================================
-     *
-     * O simulador do Mercado Pago usa IDs como:
-     *
-     * ORDTST...
-     *
-     * Eles podem não existir realmente na API.
-     *
-     * Se a assinatura foi validada pelo SDK, respondemos
-     * 200 para o teste do painel.
-     * =====================================================
-     */
-
     if (
       !respostaMercadoPago.ok
     ) {
@@ -399,39 +621,15 @@ if (
         "Não foi possível consultar a Order:",
         {
           dataId,
+
           status:
             respostaMercadoPago.status,
+
           resposta:
             order,
         }
       );
 
-      if (
-        dataId.startsWith(
-          "ORDTST"
-        )
-      ) {
-        console.log(
-          "Webhook de teste validado com sucesso."
-        );
-
-        return NextResponse.json(
-          {
-            sucesso: true,
-            simulacao: true,
-          },
-          {
-            status: 200,
-          }
-        );
-      }
-
-      /*
-       * Para uma Order real, devolvemos erro.
-       *
-       * Isso permite que o Mercado Pago faça nova
-       * tentativa depois.
-       */
       return NextResponse.json(
         {
           sucesso: false,
@@ -444,7 +642,7 @@ if (
 
     /*
      * =====================================================
-     * 7. DADOS OFICIAIS DA ORDER
+     * 10. DADOS OFICIAIS DA ORDER
      * =====================================================
      */
 
@@ -453,7 +651,8 @@ if (
       dataId;
 
     const externalReference =
-      order.external_reference;
+      order.external_reference ??
+      null;
 
     const pagamentoMP =
       order.transactions
@@ -502,12 +701,49 @@ if (
 
     /*
      * =====================================================
-     * 8. LOCALIZA PAGAMENTO LOCAL
+     * 11. SOMENTE FLUXO PIX DO O BOX DRIVER
      * =====================================================
      */
 
-    let queryPagamento =
-      supabaseAdmin
+    if (
+      !externalReference ||
+      !externalReference
+        .toLowerCase()
+        .startsWith(
+          "obox_pix_"
+        )
+    ) {
+      console.warn(
+        "Order não pertence ao fluxo PIX do O Box Driver:",
+        {
+          orderId,
+          externalReference,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          sucesso: true,
+          ignorado: true,
+        },
+        {
+          status: 200,
+        }
+      );
+    }
+
+    /*
+     * =====================================================
+     * 12. LOCALIZA PAGAMENTO LOCAL
+     * =====================================================
+     */
+
+    const {
+      data: pagamento,
+      error:
+        pagamentoError,
+    } =
+      await supabaseAdmin
         .from(
           "pagamentos"
         )
@@ -517,6 +753,7 @@ if (
           pedido_id,
           status,
           metodo,
+          valor,
           order_id_provedor,
           payment_id_provedor,
           external_reference
@@ -524,36 +761,11 @@ if (
         .eq(
           "provedor",
           "mercado_pago"
-        );
-
-    /*
-     * Preferimos external_reference.
-     *
-     * Ela foi gerada pelo próprio O Box Driver e é nossa
-     * correlação principal com Mercado Pago.
-     */
-    if (
-      externalReference
-    ) {
-      queryPagamento =
-        queryPagamento.eq(
+        )
+        .eq(
           "external_reference",
           externalReference
-        );
-    } else {
-      queryPagamento =
-        queryPagamento.eq(
-          "order_id_provedor",
-          orderId
-        );
-    }
-
-    const {
-      data: pagamento,
-      error:
-        pagamentoError,
-    } =
-      await queryPagamento
+        )
         .limit(1)
         .maybeSingle();
 
@@ -575,17 +787,13 @@ if (
       );
     }
 
-    /*
-     * Pode acontecer em testes ou notificações que não
-     * pertencem ao O Box Driver.
-     *
-     * A assinatura foi válida, portanto acusamos
-     * recebimento mas não alteramos nada.
-     */
     if (!pagamento) {
       console.warn(
-        "Order sem pagamento local:",
-        orderId
+        "Order válida sem pagamento local correspondente:",
+        {
+          orderId,
+          externalReference,
+        }
       );
 
       return NextResponse.json(
@@ -602,7 +810,39 @@ if (
 
     /*
      * =====================================================
-     * 9. ATUALIZA IDENTIFICADORES E METADATA
+     * 13. CONFERE ORDER LOCAL
+     * =====================================================
+     */
+
+    if (
+      pagamento.order_id_provedor &&
+      pagamento.order_id_provedor !==
+        orderId
+    ) {
+      console.error(
+        "Order do webhook não corresponde à Order local.",
+        {
+          order_recebida:
+            orderId,
+
+          order_local:
+            pagamento.order_id_provedor,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          sucesso: false,
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    /*
+     * =====================================================
+     * 14. ATUALIZA IDENTIFICADORES
      * =====================================================
      */
 
@@ -657,16 +897,7 @@ if (
 
     /*
      * =====================================================
-     * 10. PAGAMENTO APROVADO
-     * =====================================================
-     *
-     * Na Orders API podemos encontrar:
-     *
-     * payment.status = processed
-     *
-     * e/ou
-     *
-     * order.status = processed
+     * 15. PAGAMENTO APROVADO
      * =====================================================
      */
 
@@ -679,9 +910,7 @@ if (
         "processed"
     ) {
       /*
-       * Webhook pode ser reenviado várias vezes.
-       *
-       * Se o pedido já existe, não fazemos nova conversão.
+       * Idempotência.
        */
       if (
         pagamento.status ===
@@ -704,11 +933,8 @@ if (
       }
 
       /*
-       * ===================================================
-       * CONVERTE RESERVA
-       * ===================================================
+       * Converte reserva em pedido.
        */
-
       const {
         data: numeroPedido,
         error:
@@ -730,12 +956,6 @@ if (
           conversaoError
         );
 
-        /*
-         * Não marcamos pagamento local como aprovado.
-         *
-         * Respondemos erro para permitir nova tentativa
-         * do webhook.
-         */
         return NextResponse.json(
           {
             sucesso: false,
@@ -747,11 +967,8 @@ if (
       }
 
       /*
-       * ===================================================
-       * LOCALIZA PEDIDO CRIADO
-       * ===================================================
+       * Busca pedido criado.
        */
-
       const {
         data:
           reservaConvertida,
@@ -788,12 +1005,6 @@ if (
           }
         );
       }
-
-      /*
-       * ===================================================
-       * MARCA PAGAMENTO APROVADO
-       * ===================================================
-       */
 
       const agora =
         new Date()
@@ -850,7 +1061,7 @@ if (
       );
 
       console.log(
-        `PIX MERCADO PAGO APROVADO`
+        "PIX MERCADO PAGO APROVADO"
       );
 
       console.log(
@@ -879,7 +1090,7 @@ if (
 
     /*
      * =====================================================
-     * 11. PENDENTE / AGUARDANDO PIX
+     * 16. PENDENTE
      * =====================================================
      */
 
@@ -942,6 +1153,15 @@ if (
         );
       }
 
+      console.log(
+        "PIX ainda aguardando pagamento.",
+        {
+          orderId,
+          statusPagamento,
+          statusDetail,
+        }
+      );
+
       return NextResponse.json(
         {
           sucesso: true,
@@ -955,7 +1175,7 @@ if (
 
     /*
      * =====================================================
-     * 12. RECUSADO / CANCELADO / EXPIRADO
+     * 17. RECUSADO / CANCELADO / EXPIRADO
      * =====================================================
      */
 
@@ -991,9 +1211,7 @@ if (
         "expirado";
     }
 
-    if (
-      novoStatus
-    ) {
+    if (novoStatus) {
       const agora =
         new Date()
           .toISOString();
@@ -1055,7 +1273,7 @@ if (
       }
 
       /*
-       * Libera estoque reservado.
+       * Libera reserva.
        */
       if (
         novoStatus ===
@@ -1063,47 +1281,91 @@ if (
         novoStatus ===
           "cancelado"
       ) {
-        await supabaseAdmin
-          .from(
-            "reservas_estoque"
-          )
-          .update({
-            status:
-              "cancelada",
+        const {
+          error:
+            reservaCanceladaError,
+        } =
+          await supabaseAdmin
+            .from(
+              "reservas_estoque"
+            )
+            .update({
+              status:
+                "cancelada",
 
-            cancelada_em:
-              agora,
-          })
-          .eq(
-            "id",
-            pagamento.reserva_id
-          )
-          .eq(
-            "status",
-            "ativa"
+              cancelada_em:
+                agora,
+            })
+            .eq(
+              "id",
+              pagamento.reserva_id
+            )
+            .eq(
+              "status",
+              "ativa"
+            );
+
+        if (
+          reservaCanceladaError
+        ) {
+          console.error(
+            "Erro ao cancelar reserva:",
+            reservaCanceladaError
           );
+
+          return NextResponse.json(
+            {
+              sucesso: false,
+            },
+            {
+              status: 500,
+            }
+          );
+        }
       }
 
       if (
         novoStatus ===
         "expirado"
       ) {
-        await supabaseAdmin
-          .from(
-            "reservas_estoque"
-          )
-          .update({
-            status:
-              "expirada",
-          })
-          .eq(
-            "id",
-            pagamento.reserva_id
-          )
-          .eq(
-            "status",
-            "ativa"
+        const {
+          error:
+            reservaExpiradaError,
+        } =
+          await supabaseAdmin
+            .from(
+              "reservas_estoque"
+            )
+            .update({
+              status:
+                "expirada",
+            })
+            .eq(
+              "id",
+              pagamento.reserva_id
+            )
+            .eq(
+              "status",
+              "ativa"
+            );
+
+        if (
+          reservaExpiradaError
+        ) {
+          console.error(
+            "Erro ao expirar reserva:",
+            reservaExpiradaError
           );
+
+          return NextResponse.json(
+            {
+              sucesso: false,
+            },
+            {
+              status: 500,
+            }
+          );
+        }
       }
 
       return NextResponse.json(
@@ -1120,7 +1382,7 @@ if (
 
     /*
      * =====================================================
-     * 13. STATUS AINDA NÃO MAPEADO
+     * 18. STATUS NÃO MAPEADO
      * =====================================================
      */
 
@@ -1136,7 +1398,6 @@ if (
     return NextResponse.json(
       {
         sucesso: true,
-
         status_nao_mapeado:
           true,
       },

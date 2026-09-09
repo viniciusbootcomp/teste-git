@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 type DisponibilidadeUnidade = {
@@ -46,6 +47,11 @@ export default function AdicionarCarrinho({
 
   const [mensagem, setMensagem] =
     useState("");
+
+  const [
+    adicionadoComSucesso,
+    setAdicionadoComSucesso,
+  ] = useState(false);
 
   /*
    * =====================================================
@@ -133,6 +139,7 @@ export default function AdicionarCarrinho({
 
   function aumentar() {
     setMensagem("");
+    setAdicionadoComSucesso(false);
 
     if (
       quantidade <
@@ -146,6 +153,7 @@ export default function AdicionarCarrinho({
 
   function diminuir() {
     setMensagem("");
+    setAdicionadoComSucesso(false);
 
     if (quantidade > 1) {
       setQuantidade(
@@ -158,6 +166,7 @@ export default function AdicionarCarrinho({
     valor: string
   ) {
     setMensagem("");
+    setAdicionadoComSucesso(false);
 
     const novaQuantidade =
       Number(valor);
@@ -219,6 +228,7 @@ export default function AdicionarCarrinho({
 
   function adicionar() {
     setMensagem("");
+    setAdicionadoComSucesso(false);
 
     if (
       quantidade <= 0
@@ -314,6 +324,10 @@ export default function AdicionarCarrinho({
         `Carrinho atualizado para ${quantidade} unidade(s).`
       );
 
+      setAdicionadoComSucesso(
+        true
+      );
+
       return;
     }
 
@@ -334,6 +348,10 @@ export default function AdicionarCarrinho({
 
     setMensagem(
       `${quantidade} unidade(s) adicionada(s) ao carrinho.`
+    );
+
+    setAdicionadoComSucesso(
+      true
     );
   }
 
@@ -505,9 +523,29 @@ export default function AdicionarCarrinho({
       </button>
 
       {mensagem && (
-        <p className="mt-3 rounded-lg border border-gray-300 p-3">
-          {mensagem}
-        </p>
+        <div className="mt-3 rounded-xl border border-gray-300 p-4">
+          <p className="font-semibold">
+            {mensagem}
+          </p>
+
+          {adicionadoComSucesso && (
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <Link
+                href="/"
+                className="flex-1 rounded-lg border border-gray-300 px-4 py-3 text-center font-semibold"
+              >
+                Continuar comprando
+              </Link>
+
+              <Link
+                href="/carrinho"
+                className="flex-1 rounded-lg bg-black px-4 py-3 text-center font-semibold text-white"
+              >
+                Ir para o carrinho
+              </Link>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
