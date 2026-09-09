@@ -68,7 +68,7 @@ type RespostaReconciliacao = {
 
 type MetodoPagamento =
   | "pix"
-  | "cartao_credito";
+  | "cartao";
 
 type RespostaCartao = {
   sucesso: boolean;
@@ -87,6 +87,8 @@ type RespostaCartao = {
   erro?: string;
   erro_mercado_pago?: string | null;
 };
+
+type RespostaDebito = RespostaCartao;
 
 export default function PagamentoPage() {
   const router = useRouter();
@@ -133,6 +135,12 @@ export default function PagamentoPage() {
   const [
     processandoCartao,
     setProcessandoCartao,
+  ] =
+    useState(false);
+
+  const [
+    processandoDebito,
+    setProcessandoDebito,
   ] =
     useState(false);
 
@@ -1011,6 +1019,302 @@ export default function PagamentoPage() {
 
   /*
    * =====================================================
+   * PROCESSA CARTÃO DE DÉBITO
+   * =====================================================
+   */
+
+  const processarDebito =
+    useCallback(
+      async (
+        formData: Record<string, unknown>
+      ) => {
+        setMensagem("");
+
+        if (!reserva) {
+          setMensagem(
+            "Reserva não carregada."
+          );
+          return;
+        }
+
+        if (
+          reserva.status !== "ativa"
+        ) {
+          setMensagem(
+            `A reserva está com status "${reserva.status}".`
+          );
+          return;
+        }
+
+        if (
+          new Date(
+            reserva.expira_em
+          ).getTime() <=
+          Date.now()
+        ) {
+          setMensagem(
+            "O prazo da reserva terminou. Volte ao carrinho e tente novamente."
+          );
+          return;
+        }
+
+        if (
+          processandoDebito ||
+          processando
+        ) {
+          return;
+        }
+
+        const token =
+          typeof formData.token === "string"
+            ? formData.token
+            : "";
+
+        const paymentMethodId =
+          typeof formData.paymentMethodId === "string"
+            ? formData.paymentMethodId
+            : typeof formData.payment_method_id === "string"
+              ? formData.payment_method_id
+              : "";
+
+        let payerEmail = "";
+
+        const payer =
+          formData.payer;
+
+        if (
+          payer &&
+          typeof payer === "object" &&
+          "email" in payer
+        ) {
+          const emailValue =
+            (payer as { email?: unknown }).email;
+
+          if (
+            typeof emailValue === "string"
+          ) {
+            payerEmail =
+              emailValue;
+          }
+        }
+
+        if (
+          !payerEmail &&
+          typeof formData.payerEmail === "string"
+        ) {
+          payerEmail =
+            formData.payerEmail;
+        }
+
+        if (
+          !payerEmail &&
+          typeof formData.email === "string"
+        ) {
+          payerEmail =
+            formData.email;
+        }
+
+        if (
+          !token ||
+          !paymentMethodId ||
+          !payerEmail
+        ) {
+          setMensagem(
+            "O Mercado Pago não retornou todos os dados necessários do cartão de débito. Revise os campos e tente novamente."
+          );
+          return;
+        }
+
+        setProcessandoDebito(true);
+        setProcessando(true);
+
+        try {
+          const {
+            data: sessionData,
+            error: sessionError,
+          } =
+            await supabase.auth.getSession();
+
+          if (
+            sessionError ||
+            !sessionData.session
+          ) {
+            setMensagem(
+              "Sua sessão expirou. Entre novamente para continuar."
+            );
+            return;
+          }
+
+          const resposta =
+            await fetch(
+              "/api/mercado-pago/debito",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                  Authorization:
+                    `Bearer ${sessionData.session.access_token}`,
+                },
+                body:
+                  JSON.stringify({
+                    reserva_id:
+                      reserva.id,
+                    token,
+                    payment_method_id:
+                      paymentMethodId,
+                    payer_email:
+                      payerEmail,
+                  }),
+              }
+            );
+
+          let resultado:
+            RespostaDebito;
+
+          try {
+            resultado =
+              (await resposta.json()) as RespostaDebito;
+          } catch {
+            setMensagem(
+              "O servidor retornou uma resposta inválida ao processar o cartão de débito."
+            );
+            return;
+          }
+
+          if (
+            !resposta.ok ||
+            !resultado.sucesso
+          ) {
+            setMensagem(
+              resultado.mensagem ??
+                resultado.erro ??
+                "Não foi possível processar o pagamento com cartão de débito."
+            );
+            return;
+          }
+
+          if (
+            resultado.aprovado ||
+            resultado.ja_processado
+          ) {
+            setMensagem(
+              "Pagamento aprovado! Seu pedido foi criado com sucesso."
+            );
+
+            await concluirPagamento(
+              resultado.numero_pedido,
+              resultado.pedido_id
+            );
+
+            return;
+          }
+
+          if (
+            resultado.recusado
+          ) {
+            setMensagem(
+              resultado.status_detail
+                ? `Pagamento recusado pelo Mercado Pago: ${resultado.status_detail}.`
+                : "Pagamento recusado pelo Mercado Pago. Revise os dados ou tente outro cartão."
+            );
+            return;
+          }
+
+          setMensagem(
+            "Pagamento de débito enviado ao Mercado Pago e ainda está em processamento."
+          );
+        } catch (error) {
+          console.error(
+            "Erro ao processar cartão de débito:",
+            error
+          );
+
+          setMensagem(
+            "Houve uma falha de comunicação ao processar o cartão de débito. Tente novamente."
+          );
+        } finally {
+          setProcessandoDebito(false);
+          setProcessando(false);
+        }
+      },
+      [
+        reserva,
+        processandoDebito,
+        processando,
+        concluirPagamento,
+      ]
+    );
+
+  /*
+   * =====================================================
+   * ROTEIA O PAYMENT BRICK PARA CRÉDITO OU DÉBITO
+   * =====================================================
+   *
+   * O próprio Mercado Pago identifica o tipo de cartão.
+   * Não inferimos o tipo pelo número ou pela bandeira.
+   * =====================================================
+   */
+
+  const processarCartaoUnificado =
+    useCallback(
+      async (
+        selectedPaymentMethod:
+          string,
+        formData:
+          Record<
+            string,
+            unknown
+          >
+      ) => {
+        const tipo =
+          selectedPaymentMethod
+            .trim()
+            .toLowerCase();
+
+        console.log(
+          "Tipo de cartão selecionado pelo Mercado Pago:",
+          tipo
+        );
+
+        if (
+          tipo ===
+            "credit_card" ||
+          tipo ===
+            "creditcard"
+        ) {
+          await processarCartao(
+            formData
+          );
+
+          return;
+        }
+
+        if (
+          tipo ===
+            "debit_card" ||
+          tipo ===
+            "debitcard"
+        ) {
+          await processarDebito(
+            formData
+          );
+
+          return;
+        }
+
+        setMensagem(
+          `Tipo de pagamento com cartão não suportado: ${selectedPaymentMethod}.`
+        );
+      },
+      [
+        processarCartao,
+        processarDebito,
+      ]
+    );
+
+  /*
+   * =====================================================
    * CALLBACK ESTÁVEL DO BRICK
    * =====================================================
    *
@@ -1422,6 +1726,7 @@ export default function PagamentoPage() {
                       Boolean(pix) ||
                       processando ||
                       processandoCartao ||
+                      processandoDebito ||
                       reservaExpirada ||
                       reservaConvertida ||
                       reservaCancelada
@@ -1445,29 +1750,30 @@ export default function PagamentoPage() {
                     type="button"
                     onClick={() =>
                       setMetodoPagamento(
-                        "cartao_credito"
+                        "cartao"
                       )
                     }
                     disabled={
                       Boolean(pix) ||
                       processando ||
                       processandoCartao ||
+                      processandoDebito ||
                       reservaExpirada ||
                       reservaConvertida ||
                       reservaCancelada
                     }
                     className={`rounded-xl border p-4 text-left transition ${
-                      metodoPagamento === "cartao_credito"
+                      metodoPagamento === "cartao"
                         ? "border-blue-500 bg-blue-50"
                         : "border-gray-300 bg-white"
                     } disabled:cursor-not-allowed disabled:opacity-60`}
                   >
                     <p className="font-bold">
-                      Cartão de crédito
+                      Cartão
                     </p>
 
                     <p className="mt-1 text-sm text-gray-600">
-                      Pagamento protegido pelo Mercado Pago.
+                      Crédito ou débito pelo Mercado Pago.
                     </p>
                   </button>
                 </div>
@@ -1496,6 +1802,7 @@ export default function PagamentoPage() {
                         gerandoPix ||
                         processando ||
                         processandoCartao ||
+                        processandoDebito ||
                         reservaExpirada ||
                         reservaConvertida ||
                         reservaCancelada
@@ -1604,22 +1911,23 @@ export default function PagamentoPage() {
                 </>
               )}
 
-              {metodoPagamento === "cartao_credito" &&
+              {metodoPagamento === "cartao" &&
                 !pix && (
                   <div className="mt-6">
                     <div className="mb-4 rounded-xl border border-blue-300 bg-blue-50 p-4">
                       <p className="font-bold">
-                        Cartão de crédito Mercado Pago
+                        Cartão Mercado Pago
                       </p>
 
                       <p className="mt-2 text-sm text-gray-600">
-                        Os dados do cartão são preenchidos no componente
-                        seguro do Mercado Pago. O O Box Driver não armazena
-                        número do cartão nem código de segurança.
+                        Escolha crédito ou débito dentro do ambiente
+                        seguro do Mercado Pago. O O Box Driver não
+                        armazena número do cartão nem código de segurança.
                       </p>
                     </div>
 
-                    {processandoCartao && (
+                    {(processandoCartao ||
+                      processandoDebito) && (
                       <div className="mb-4 rounded-xl border border-orange-300 bg-orange-50 p-4 text-sm">
                         Processando pagamento com cartão...
                       </div>
@@ -1628,7 +1936,7 @@ export default function PagamentoPage() {
                     <MercadoPagoCartao
                       valor={total}
                       onSubmit={
-                        processarCartao
+                        processarCartaoUnificado
                       }
                       onError={
                         handleErroCartaoBrick

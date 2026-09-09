@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  CardPayment,
+  Payment,
   initMercadoPago,
 } from "@mercadopago/sdk-react";
 
@@ -17,6 +17,7 @@ type MercadoPagoCartaoProps = {
   valor: number;
 
   onSubmit: (
+    selectedPaymentMethod: string,
     formData: Record<string, unknown>
   ) => Promise<void>;
 
@@ -33,11 +34,7 @@ const publicKey =
 
 /*
  * =====================================================
- * INICIALIZAÇÃO ÚNICA DO SDK
- * =====================================================
- *
- * Este código roda no módulo do componente.
- * Não reinicializamos o Mercado Pago a cada render.
+ * INICIALIZAÇÃO DO SDK
  * =====================================================
  */
 
@@ -58,13 +55,12 @@ function MercadoPagoCartao({
 }: MercadoPagoCartaoProps) {
   /*
    * =====================================================
-   * REFERÊNCIAS DOS CALLBACKS
+   * CALLBACKS ESTÁVEIS
    * =====================================================
    *
-   * O componente pai possui um contador que muda a cada
-   * segundo. Guardamos os callbacks em refs para o Brick
-   * receber funções estáveis e não tentar remontar por
-   * causa de uma nova identidade de função.
+   * O page.tsx possui contador que renderiza a tela
+   * frequentemente. Guardamos callbacks em refs para
+   * evitar remontagens desnecessárias do Brick.
    * =====================================================
    */
 
@@ -94,7 +90,15 @@ function MercadoPagoCartao({
 
   /*
    * =====================================================
-   * CONFIGURAÇÕES ESTÁVEIS
+   * CONFIGURAÇÃO DO PAYMENT BRICK
+   * =====================================================
+   *
+   * Utilizamos um único Brick para:
+   *
+   * - cartão de crédito
+   * - cartão de débito
+   *
+   * PIX continua no fluxo próprio do O Box Driver.
    * =====================================================
    */
 
@@ -112,15 +116,11 @@ function MercadoPagoCartao({
     useMemo(
       () => ({
         paymentMethods: {
-          types: {
-            excluded: [
-              "debit_card",
-              "prepaid_card",
-            ] as (
-              | "debit_card"
-              | "prepaid_card"
-            )[],
-          },
+          creditCard:
+            "all" as const,
+
+          debitCard:
+            "all" as const,
         },
       }),
       []
@@ -128,24 +128,62 @@ function MercadoPagoCartao({
 
   /*
    * =====================================================
-   * CALLBACKS ENTREGUES AO BRICK
+   * SUBMIT
    * =====================================================
    *
-   * Estes callbacks mantêm a mesma identidade entre
-   * renderizações.
+   * O Payment Brick informa:
+   *
+   * - selectedPaymentMethod
+   * - formData
+   *
+   * O page.tsx decide qual backend utilizar:
+   *
+   * credit_card -> /api/mercado-pago/cartao
+   * debit_card  -> /api/mercado-pago/debito
    * =====================================================
    */
 
   const handleSubmit =
     useCallback(
       async (
-        formData: unknown
+        dados: unknown
       ) => {
+        const payload =
+          dados as {
+            selectedPaymentMethod?: unknown;
+            formData?: unknown;
+          };
+
+        const selectedPaymentMethod =
+          typeof payload
+            .selectedPaymentMethod ===
+          "string"
+            ? payload
+                .selectedPaymentMethod
+            : "";
+
+        const formData =
+          payload.formData &&
+          typeof payload.formData ===
+            "object"
+            ? payload
+                .formData as Record<
+                  string,
+                  unknown
+                >
+            : {};
+
+        if (
+          !selectedPaymentMethod
+        ) {
+          throw new Error(
+            "Mercado Pago não informou o tipo de cartão selecionado."
+          );
+        }
+
         await onSubmitRef.current(
-          formData as Record<
-            string,
-            unknown
-          >
+          selectedPaymentMethod,
+          formData
         );
       },
       []
@@ -154,7 +192,7 @@ function MercadoPagoCartao({
   const handleReady =
     useCallback(() => {
       console.log(
-        "Card Payment Brick carregado."
+        "Payment Brick de cartões carregado."
       );
 
       onReadyRef.current?.();
@@ -166,7 +204,7 @@ function MercadoPagoCartao({
         error: unknown
       ) => {
         console.error(
-          "Erro no Card Payment Brick:",
+          "Erro no Payment Brick de cartões:",
           error
         );
 
@@ -194,7 +232,7 @@ function MercadoPagoCartao({
 
   return (
     <div className="rounded-2xl border border-gray-300 bg-white p-4">
-      <CardPayment
+      <Payment
         initialization={
           initialization
         }
@@ -215,10 +253,6 @@ function MercadoPagoCartao({
   );
 }
 
-/*
- * Evita renderização desnecessária quando o componente pai
- * atualiza apenas o contador da reserva.
- */
 export default memo(
   MercadoPagoCartao
 );
