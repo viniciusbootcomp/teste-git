@@ -13,6 +13,7 @@ import {
 } from "next/navigation";
 
 import { supabase } from "@/lib/supabase";
+import MercadoPagoCartao from "@/components/MercadoPagoCartao";
 
 type Reserva = {
   id: string;
@@ -65,6 +66,28 @@ type RespostaReconciliacao = {
   status_detail?: string;
 };
 
+type MetodoPagamento =
+  | "pix"
+  | "cartao_credito";
+
+type RespostaCartao = {
+  sucesso: boolean;
+  aprovado?: boolean;
+  ja_processado?: boolean;
+  recusado?: boolean;
+  numero_pedido?: number;
+  pedido_id?: string;
+  pagamento_id?: string;
+  reserva_id?: string;
+  order_id?: string;
+  payment_id?: string | null;
+  status?: string;
+  status_detail?: string | null;
+  mensagem?: string;
+  erro?: string;
+  erro_mercado_pago?: string | null;
+};
+
 export default function PagamentoPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -97,6 +120,20 @@ export default function PagamentoPage() {
     useState(false);
 
   const [copiado, setCopiado] =
+    useState(false);
+
+  const [
+    metodoPagamento,
+    setMetodoPagamento,
+  ] =
+    useState<MetodoPagamento>(
+      "pix"
+    );
+
+  const [
+    processandoCartao,
+    setProcessandoCartao,
+  ] =
     useState(false);
 
   const [
@@ -735,6 +772,263 @@ export default function PagamentoPage() {
 
   /*
    * =====================================================
+   * PROCESSA CARTÃO DE CRÉDITO
+   * =====================================================
+   */
+
+  const processarCartao =
+    useCallback(
+      async (
+        formData: Record<string, unknown>
+      ) => {
+        setMensagem("");
+
+        if (!reserva) {
+          setMensagem(
+            "Reserva não carregada."
+          );
+          return;
+        }
+
+        if (
+          reserva.status !== "ativa"
+        ) {
+          setMensagem(
+            `A reserva está com status "${reserva.status}".`
+          );
+          return;
+        }
+
+        if (
+          new Date(
+            reserva.expira_em
+          ).getTime() <=
+          Date.now()
+        ) {
+          setMensagem(
+            "O prazo da reserva terminou. Volte ao carrinho e tente novamente."
+          );
+          return;
+        }
+
+        if (
+          processandoCartao ||
+          processando
+        ) {
+          return;
+        }
+
+        const token =
+          typeof formData.token === "string"
+            ? formData.token
+            : "";
+
+        const paymentMethodId =
+          typeof formData.paymentMethodId === "string"
+            ? formData.paymentMethodId
+            : typeof formData.payment_method_id === "string"
+              ? formData.payment_method_id
+              : "";
+
+        const installments =
+          Number(
+            formData.installments ?? 0
+          );
+
+        let payerEmail = "";
+
+        const payer =
+          formData.payer;
+
+        if (
+          payer &&
+          typeof payer === "object" &&
+          "email" in payer
+        ) {
+          const emailValue =
+            (payer as { email?: unknown }).email;
+
+          if (
+            typeof emailValue === "string"
+          ) {
+            payerEmail =
+              emailValue;
+          }
+        }
+
+        if (
+          !payerEmail &&
+          typeof formData.payerEmail === "string"
+        ) {
+          payerEmail =
+            formData.payerEmail;
+        }
+
+        if (
+          !payerEmail &&
+          typeof formData.email === "string"
+        ) {
+          payerEmail =
+            formData.email;
+        }
+
+        if (
+          !token ||
+          !paymentMethodId ||
+          !Number.isInteger(
+            installments
+          ) ||
+          installments < 1 ||
+          !payerEmail
+        ) {
+          setMensagem(
+            "O Mercado Pago não retornou todos os dados necessários do cartão. Revise os campos e tente novamente."
+          );
+          return;
+        }
+
+        setProcessandoCartao(true);
+        setProcessando(true);
+
+        try {
+          const {
+            data: sessionData,
+            error: sessionError,
+          } =
+            await supabase.auth.getSession();
+
+          if (
+            sessionError ||
+            !sessionData.session
+          ) {
+            setMensagem(
+              "Sua sessão expirou. Entre novamente para continuar."
+            );
+            return;
+          }
+
+          const resposta =
+            await fetch(
+              "/api/mercado-pago/cartao",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                  Authorization:
+                    `Bearer ${sessionData.session.access_token}`,
+                },
+                body:
+                  JSON.stringify({
+                    reserva_id:
+                      reserva.id,
+                    token,
+                    payment_method_id:
+                      paymentMethodId,
+                    installments,
+                    payer_email:
+                      payerEmail,
+                  }),
+              }
+            );
+
+          let resultado:
+            RespostaCartao;
+
+          try {
+            resultado =
+              (await resposta.json()) as RespostaCartao;
+          } catch {
+            setMensagem(
+              "O servidor retornou uma resposta inválida ao processar o cartão."
+            );
+            return;
+          }
+
+          if (
+            !resposta.ok ||
+            !resultado.sucesso
+          ) {
+            setMensagem(
+              resultado.mensagem ??
+                resultado.erro ??
+                "Não foi possível processar o pagamento com cartão."
+            );
+            return;
+          }
+
+          if (
+            resultado.aprovado ||
+            resultado.ja_processado
+          ) {
+            setMensagem(
+              "Pagamento aprovado! Seu pedido foi criado com sucesso."
+            );
+
+            await concluirPagamento(
+              resultado.numero_pedido,
+              resultado.pedido_id
+            );
+
+            return;
+          }
+
+          if (
+            resultado.recusado
+          ) {
+            setMensagem(
+              resultado.status_detail
+                ? `Pagamento recusado pelo Mercado Pago: ${resultado.status_detail}.`
+                : "Pagamento recusado pelo Mercado Pago. Revise os dados ou tente outro cartão."
+            );
+            return;
+          }
+
+          setMensagem(
+            "Pagamento enviado ao Mercado Pago e ainda está em processamento."
+          );
+        } catch (error) {
+          console.error(
+            "Erro ao processar cartão:",
+            error
+          );
+
+          setMensagem(
+            "Houve uma falha de comunicação ao processar o cartão. Tente novamente."
+          );
+        } finally {
+          setProcessandoCartao(false);
+          setProcessando(false);
+        }
+      },
+      [
+        reserva,
+        processandoCartao,
+        processando,
+        concluirPagamento,
+      ]
+    );
+
+  /*
+   * =====================================================
+   * CALLBACK ESTÁVEL DO BRICK
+   * =====================================================
+   *
+   * O contador da reserva atualiza a página a cada segundo.
+   * Este callback é memorizado para não entregar uma função
+   * nova ao Brick em cada renderização.
+   * =====================================================
+   */
+
+  const handleErroCartaoBrick =
+    useCallback(() => {
+      setMensagem(
+        "Não foi possível carregar ou processar o formulário do Mercado Pago."
+      );
+    }, []);
+
+  /*
+   * =====================================================
    * POLLING DE SEGURANÇA
    * =====================================================
    */
@@ -1111,135 +1405,237 @@ export default function PagamentoPage() {
                 )}
               </p>
 
-              <div className="mt-6 rounded-xl border border-blue-300 bg-blue-50 p-4">
-                <p className="font-bold">
-                  PIX Mercado Pago
+              <div className="mt-6">
+                <p className="mb-3 text-sm font-semibold text-gray-700">
+                  Escolha a forma de pagamento
                 </p>
 
-                <p className="mt-2 text-sm text-gray-600">
-                  Gere o PIX e conclua o pagamento. A confirmação
-                  será verificada automaticamente pelo O Box Driver.
-                </p>
-              </div>
-
-              {!pix ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    void gerarPix()
-                  }
-                  disabled={
-                    gerandoPix ||
-                    processando ||
-                    reservaExpirada ||
-                    reservaConvertida ||
-                    reservaCancelada
-                  }
-                  className="mt-6 w-full rounded-xl bg-black p-4 text-lg font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-400"
-                >
-                  {gerandoPix
-                    ? "Gerando PIX..."
-                    : "Gerar PIX"}
-                </button>
-              ) : (
-                <div className="mt-6 space-y-5">
-                  <div className="rounded-xl border border-green-300 bg-green-50 p-4">
-                    <p className="font-bold text-green-800">
-                      PIX criado
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMetodoPagamento(
+                        "pix"
+                      )
+                    }
+                    disabled={
+                      Boolean(pix) ||
+                      processando ||
+                      processandoCartao ||
+                      reservaExpirada ||
+                      reservaConvertida ||
+                      reservaCancelada
+                    }
+                    className={`rounded-xl border p-4 text-left transition ${
+                      metodoPagamento === "pix"
+                        ? "border-blue-500 bg-blue-50"
+                        : "border-gray-300 bg-white"
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    <p className="font-bold">
+                      PIX
                     </p>
 
                     <p className="mt-1 text-sm text-gray-600">
-                      Aguardando confirmação do Mercado Pago.
+                      Pagamento rápido via Mercado Pago.
                     </p>
-
-                    {conciliando && (
-                      <p className="mt-2 text-xs text-gray-500">
-                        Verificando pagamento...
-                      </p>
-                    )}
-                  </div>
-
-                  {pix.qr_code_base64 && (
-                    <div className="text-center">
-                      <p className="mb-3 font-semibold">
-                        QR Code
-                      </p>
-
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={
-                          pix.qr_code_base64.startsWith(
-                            "data:"
-                          )
-                            ? pix.qr_code_base64
-                            : `data:image/png;base64,${pix.qr_code_base64}`
-                        }
-                        alt="QR Code PIX"
-                        className="mx-auto max-w-64 rounded-xl border border-gray-200 p-3"
-                      />
-                    </div>
-                  )}
-
-                  {pix.qr_code && (
-                    <div>
-                      <p className="mb-2 font-semibold">
-                        PIX Copia e Cola
-                      </p>
-
-                      <textarea
-                        readOnly
-                        value={
-                          pix.qr_code
-                        }
-                        rows={5}
-                        className="w-full resize-none rounded-xl border border-gray-300 p-3 text-sm"
-                      />
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void copiarPix()
-                        }
-                        className="mt-2 w-full rounded-xl border border-gray-300 p-3 font-semibold"
-                      >
-                        {copiado
-                          ? "Código copiado!"
-                          : "Copiar código PIX"}
-                      </button>
-                    </div>
-                  )}
-
-                  {pix.ticket_url && (
-                    <a
-                      href={
-                        pix.ticket_url
-                      }
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block w-full rounded-xl border border-gray-300 p-3 text-center font-semibold"
-                    >
-                      Abrir página PIX do Mercado Pago
-                    </a>
-                  )}
+                  </button>
 
                   <button
                     type="button"
                     onClick={() =>
-                      void reconciliarPix(
-                        false
+                      setMetodoPagamento(
+                        "cartao_credito"
                       )
                     }
                     disabled={
-                      conciliando
+                      Boolean(pix) ||
+                      processando ||
+                      processandoCartao ||
+                      reservaExpirada ||
+                      reservaConvertida ||
+                      reservaCancelada
                     }
-                    className="w-full rounded-xl bg-black p-3 font-semibold text-white disabled:bg-gray-400"
+                    className={`rounded-xl border p-4 text-left transition ${
+                      metodoPagamento === "cartao_credito"
+                        ? "border-blue-500 bg-blue-50"
+                        : "border-gray-300 bg-white"
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
                   >
-                    {conciliando
-                      ? "Verificando pagamento..."
-                      : "Já paguei — verificar agora"}
+                    <p className="font-bold">
+                      Cartão de crédito
+                    </p>
+
+                    <p className="mt-1 text-sm text-gray-600">
+                      Pagamento protegido pelo Mercado Pago.
+                    </p>
                   </button>
                 </div>
+              </div>
+
+              {metodoPagamento === "pix" && (
+                <>
+                  <div className="mt-6 rounded-xl border border-blue-300 bg-blue-50 p-4">
+                    <p className="font-bold">
+                      PIX Mercado Pago
+                    </p>
+
+                    <p className="mt-2 text-sm text-gray-600">
+                      Gere o PIX e conclua o pagamento. A confirmação
+                      será verificada automaticamente pelo O Box Driver.
+                    </p>
+                  </div>
+
+                  {!pix ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void gerarPix()
+                      }
+                      disabled={
+                        gerandoPix ||
+                        processando ||
+                        processandoCartao ||
+                        reservaExpirada ||
+                        reservaConvertida ||
+                        reservaCancelada
+                      }
+                      className="mt-6 w-full rounded-xl bg-black p-4 text-lg font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-400"
+                    >
+                      {gerandoPix
+                        ? "Gerando PIX..."
+                        : "Gerar PIX"}
+                    </button>
+                  ) : (
+                    <div className="mt-6 space-y-5">
+                      <div className="rounded-xl border border-green-300 bg-green-50 p-4">
+                        <p className="font-bold text-green-800">
+                          PIX criado
+                        </p>
+
+                        <p className="mt-1 text-sm text-gray-600">
+                          Aguardando confirmação do Mercado Pago.
+                        </p>
+
+                        {conciliando && (
+                          <p className="mt-2 text-xs text-gray-500">
+                            Verificando pagamento...
+                          </p>
+                        )}
+                      </div>
+
+                      {pix.qr_code_base64 && (
+                        <div className="text-center">
+                          <p className="mb-3 font-semibold">
+                            QR Code
+                          </p>
+
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={
+                              pix.qr_code_base64.startsWith(
+                                "data:"
+                              )
+                                ? pix.qr_code_base64
+                                : `data:image/png;base64,${pix.qr_code_base64}`
+                            }
+                            alt="QR Code PIX"
+                            className="mx-auto max-w-64 rounded-xl border border-gray-200 p-3"
+                          />
+                        </div>
+                      )}
+
+                      {pix.qr_code && (
+                        <div>
+                          <p className="mb-2 font-semibold">
+                            PIX Copia e Cola
+                          </p>
+
+                          <textarea
+                            readOnly
+                            value={pix.qr_code}
+                            rows={5}
+                            className="w-full resize-none rounded-xl border border-gray-300 p-3 text-sm"
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void copiarPix()
+                            }
+                            className="mt-2 w-full rounded-xl border border-gray-300 p-3 font-semibold"
+                          >
+                            {copiado
+                              ? "Código copiado!"
+                              : "Copiar código PIX"}
+                          </button>
+                        </div>
+                      )}
+
+                      {pix.ticket_url && (
+                        <a
+                          href={pix.ticket_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block w-full rounded-xl border border-gray-300 p-3 text-center font-semibold"
+                        >
+                          Abrir página PIX do Mercado Pago
+                        </a>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void reconciliarPix(
+                            false
+                          )
+                        }
+                        disabled={
+                          conciliando
+                        }
+                        className="w-full rounded-xl bg-black p-3 font-semibold text-white disabled:bg-gray-400"
+                      >
+                        {conciliando
+                          ? "Verificando pagamento..."
+                          : "Já paguei — verificar agora"}
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
+
+              {metodoPagamento === "cartao_credito" &&
+                !pix && (
+                  <div className="mt-6">
+                    <div className="mb-4 rounded-xl border border-blue-300 bg-blue-50 p-4">
+                      <p className="font-bold">
+                        Cartão de crédito Mercado Pago
+                      </p>
+
+                      <p className="mt-2 text-sm text-gray-600">
+                        Os dados do cartão são preenchidos no componente
+                        seguro do Mercado Pago. O O Box Driver não armazena
+                        número do cartão nem código de segurança.
+                      </p>
+                    </div>
+
+                    {processandoCartao && (
+                      <div className="mb-4 rounded-xl border border-orange-300 bg-orange-50 p-4 text-sm">
+                        Processando pagamento com cartão...
+                      </div>
+                    )}
+
+                    <MercadoPagoCartao
+                      valor={total}
+                      onSubmit={
+                        processarCartao
+                      }
+                      onError={
+                        handleErroCartaoBrick
+                      }
+                    />
+                  </div>
+                )}
 
               {reserva.status ===
                 "ativa" &&
