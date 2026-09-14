@@ -46,13 +46,8 @@ export default function FilaRetiradaPage() {
   const [agora, setAgora] =
     useState<number | null>(null);
 
-  /*
-   * Por enquanto temos apenas uma unidade.
-   *
-   * Quando houver outras unidades/franquias,
-   * essa unidade virá do perfil do funcionário.
-   */
   const CODIGO_UNIDADE_ATUAL = "MOGI-01";
+  const NOME_UNIDADE_ATUAL = "Mogi 01";
 
   const carregarFila = useCallback(async () => {
     const {
@@ -86,14 +81,6 @@ export default function FilaRetiradaPage() {
       return;
     }
 
-    /*
-     * Agora a fila é baseada em retiradas_pedido.
-     *
-     * Cada retirada tem:
-     * - unidade própria;
-     * - horário próprio de check-in;
-     * - status próprio.
-     */
     const { data, error } = await supabase
       .from("retiradas_pedido")
       .select(`
@@ -133,12 +120,6 @@ export default function FilaRetiradaPage() {
       return;
     }
 
-    /*
-     * PostgREST pode retornar linhas cujo relacionamento
-     * com unidade venha nulo dependendo do join.
-     *
-     * Por segurança filtramos novamente no navegador.
-     */
     const retiradasFiltradas =
       ((data ?? []) as unknown as RetiradaFila[]).filter(
         (retirada) =>
@@ -229,36 +210,64 @@ export default function FilaRetiradaPage() {
   if (carregando) {
     return (
       <main className="min-h-screen bg-white p-10 text-black">
-        <p>Carregando fila de retirada...</p>
+        <p>Carregando painel de retirada...</p>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-white p-10 text-black">
-      <div className="mx-auto max-w-5xl">
-        <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end">
+    <main className="min-h-screen bg-white p-6 text-black md:p-10">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
           <div>
             <p className="text-sm font-semibold uppercase tracking-widest text-gray-500">
               O Box Driver
             </p>
 
-            <h1 className="mt-2 text-3xl font-bold">
-              Clientes aguardando retirada
+            <h1 className="mt-2 text-4xl font-bold">
+              Painel de Retirada — {NOME_UNIDADE_ATUAL}
             </h1>
 
-            <p className="mt-2 text-gray-500">
-              Ordem de chegada na unidade Mogi.
+            <p className="mt-3 text-lg text-gray-600">
+              Clientes que já realizaram check-in e aguardam atendimento.
             </p>
           </div>
 
-          <div className="rounded-xl border border-gray-300 px-5 py-3">
-            <p className="text-sm text-gray-500">
-              Aguardando
-            </p>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="rounded-2xl border border-gray-300 px-6 py-4">
+              <p className="text-sm text-gray-500">
+                Aguardando
+              </p>
 
-            <p className="text-3xl font-bold">
-              {retiradas.length}
+              <p className="text-4xl font-bold">
+                {retiradas.length}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => router.push("/admin/pedidos")}
+              className="rounded-2xl border border-gray-300 px-6 py-4 font-semibold"
+            >
+              Ver todos os pedidos
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-xl border border-green-300 bg-green-50 px-5 py-4">
+          <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+            <div>
+              <p className="font-semibold text-green-800">
+                Painel operacional ativo
+              </p>
+
+              <p className="mt-1 text-sm text-green-700">
+                Mantenha esta tela aberta no terminal interno do ponto de retirada.
+              </p>
+            </div>
+
+            <p className="text-sm font-semibold text-green-700">
+              Atualização automática a cada 5 segundos
             </p>
           </div>
         </div>
@@ -270,14 +279,13 @@ export default function FilaRetiradaPage() {
         )}
 
         {retiradas.length === 0 ? (
-          <div className="rounded-2xl border border-gray-300 p-10 text-center">
-            <p className="text-2xl font-bold">
+          <div className="rounded-3xl border border-gray-300 p-14 text-center">
+            <p className="text-3xl font-bold">
               Nenhum cliente aguardando
             </p>
 
-            <p className="mt-2 text-gray-500">
-              Novos check-ins aparecerão
-              automaticamente aqui.
+            <p className="mt-3 text-lg text-gray-500">
+              Assim que um cliente fizer check-in no totem, ele aparecerá automaticamente aqui.
             </p>
           </div>
         ) : (
@@ -296,97 +304,85 @@ export default function FilaRetiradaPage() {
                 return (
                   <div
                     key={retirada.id}
-                    className="rounded-2xl border border-gray-300 p-6"
+                    className="rounded-3xl border-2 border-gray-300 p-6"
                   >
-                    <div className="flex flex-col justify-between gap-5 md:flex-row md:items-center">
+                    <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
                       <div>
-                        <div className="flex items-center gap-3">
-                          <span className="rounded-full border border-gray-300 px-3 py-1 text-sm font-semibold">
-                            #{index + 1}
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span className="rounded-full bg-black px-4 py-2 text-sm font-bold text-white">
+                            Fila #{index + 1}
                           </span>
 
-                          <h2 className="text-2xl font-bold">
+                          <h2 className="text-3xl font-bold">
                             Pedido nº{" "}
-                            {pedido?.numero_pedido ??
-                              "-"}
+                            {pedido?.numero_pedido ?? "-"}
                           </h2>
                         </div>
 
-                        <p className="mt-2 text-sm font-semibold text-gray-600">
-                          Retirada{" "}
-                          {retirada.sequencia}
+                        <p className="mt-3 text-base font-semibold text-gray-600">
+                          Retirada {retirada.sequencia}
                         </p>
 
-                        <div className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
-                          <p>
-                            <span className="text-gray-500">
-                              Unidade:
-                            </span>{" "}
-                            <strong>
-                              {unidade?.nome ??
-                                "-"}
-                            </strong>
-                          </p>
+                        <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                          <div>
+                            <p className="text-sm text-gray-500">
+                              Unidade
+                            </p>
+                            <p className="font-bold">
+                              {unidade?.nome ?? "-"}
+                            </p>
+                          </div>
 
-                          <p>
-                            <span className="text-gray-500">
-                              Ponto:
-                            </span>{" "}
-                            <strong>
+                          <div>
+                            <p className="text-sm text-gray-500">
+                              Ponto
+                            </p>
+                            <p className="font-bold">
                               {ponto?.nome ?? "-"}
-                            </strong>
-                          </p>
+                            </p>
+                          </div>
 
-                          <p>
-                            <span className="text-gray-500">
-                              Check-in:
-                            </span>{" "}
-                            <strong>
-                              {formatarHora(
-                                retirada.checkin_em
-                              )}
-                            </strong>
-                          </p>
+                          <div>
+                            <p className="text-sm text-gray-500">
+                              Check-in
+                            </p>
+                            <p className="font-bold">
+                              {formatarHora(retirada.checkin_em)}
+                            </p>
+                          </div>
 
-                          <p>
-                            <span className="text-gray-500">
-                              Espera:
-                            </span>{" "}
-                            <strong>
-                              {calcularTempoEspera(
-                                retirada.checkin_em
-                              )}
-                            </strong>
-                          </p>
+                          <div>
+                            <p className="text-sm text-gray-500">
+                              Espera
+                            </p>
+                            <p className="font-bold">
+                              {calcularTempoEspera(retirada.checkin_em)}
+                            </p>
+                          </div>
 
-                          <p>
-                            <span className="text-gray-500">
-                              Total do pedido:
-                            </span>{" "}
-                            <strong>
+                          <div>
+                            <p className="text-sm text-gray-500">
+                              Total do pedido
+                            </p>
+                            <p className="font-bold">
                               {pedido
-                                ? formatarValor(
-                                    pedido.total
-                                  )
+                                ? formatarValor(pedido.total)
                                 : "-"}
-                            </strong>
-                          </p>
+                            </p>
+                          </div>
                         </div>
                       </div>
 
                       <button
-                        onClick={() => {
-                          if (
-                            pedido?.numero_pedido
-                          ) {
-                            router.push(
-                              `/admin/pedidos/${pedido.numero_pedido}`
-                            );
-                          }
-                        }}
-                        className="rounded-xl bg-black px-6 py-4 font-semibold text-white"
+                        type="button"
+                        onClick={() =>
+                          router.push(
+                            `/admin/retiradas/${retirada.id}`
+                          )
+                        }
+                        className="rounded-2xl bg-black px-8 py-5 text-lg font-semibold text-white"
                       >
-                        Abrir retirada
+                        Atender retirada
                       </button>
                     </div>
                   </div>
@@ -396,27 +392,15 @@ export default function FilaRetiradaPage() {
           </div>
         )}
 
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+        <div className="mt-8">
           <button
+            type="button"
             onClick={carregarFila}
-            className="w-full rounded-lg border border-gray-300 p-3 font-semibold"
+            className="w-full rounded-xl border border-gray-300 p-4 font-semibold"
           >
             Atualizar agora
           </button>
-
-          <button
-            onClick={() =>
-              router.push("/admin/pedidos")
-            }
-            className="w-full rounded-lg border border-gray-300 p-3 font-semibold"
-          >
-            Todos os pedidos
-          </button>
         </div>
-
-        <p className="mt-5 text-center text-sm text-gray-400">
-          Atualização automática a cada 5 segundos
-        </p>
       </div>
     </main>
   );
