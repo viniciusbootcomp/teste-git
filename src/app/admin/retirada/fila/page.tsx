@@ -6,8 +6,18 @@ import {
   useState,
 } from "react";
 
-import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import {
+  useRouter,
+} from "next/navigation";
+
+import {
+  supabase,
+} from "@/lib/supabase";
+
+import {
+  obterAcessoOperacional,
+  type AcessoOperacional,
+} from "@/lib/auth/permissoes-operacionais";
 
 type RetiradaFila = {
   id: string;
@@ -32,185 +42,398 @@ type RetiradaFila = {
 };
 
 export default function FilaRetiradaPage() {
-  const router = useRouter();
+  const router =
+    useRouter();
 
-  const [retiradas, setRetiradas] =
+  const [
+    retiradas,
+    setRetiradas,
+  ] =
     useState<RetiradaFila[]>([]);
 
-  const [carregando, setCarregando] =
+  const [
+    acesso,
+    setAcesso,
+  ] =
+    useState<AcessoOperacional | null>(
+      null
+    );
+
+  const [
+    carregando,
+    setCarregando,
+  ] =
     useState(true);
 
-  const [mensagem, setMensagem] =
+  const [
+    mensagem,
+    setMensagem,
+  ] =
     useState("");
 
-  const [agora, setAgora] =
-    useState<number | null>(null);
+  const [
+    agora,
+    setAgora,
+  ] =
+    useState<number | null>(
+      null
+    );
 
-  const CODIGO_UNIDADE_ATUAL = "MOGI-01";
-  const NOME_UNIDADE_ATUAL = "Mogi 01";
+  const CODIGO_UNIDADE_ATUAL =
+    "MOGI-01";
 
-  const carregarFila = useCallback(async () => {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+  const NOME_UNIDADE_ATUAL =
+    "Mogi 01";
 
-    if (userError || !user) {
-      router.push("/login");
-      return;
-    }
+  const carregarFila =
+    useCallback(
+      async () => {
+        try {
+          const {
+            data: {
+              user,
+            },
+            error:
+              userError,
+          } =
+            await supabase.auth.getUser();
 
-    const { data: perfil, error: perfilError } =
-      await supabase
-        .from("perfil_cliente")
-        .select("tipo_usuario")
-        .eq("user_id", user.id)
-        .maybeSingle();
+          if (
+            userError ||
+            !user
+          ) {
+            router.push(
+              "/login"
+            );
+            return;
+          }
 
-    if (perfilError) {
-      setMensagem(
-        `Erro ao verificar acesso: ${perfilError.message}`
-      );
+          /*
+           * ===========================================
+           * ACESSO OPERACIONAL
+           * ===========================================
+           */
 
-      setCarregando(false);
-      return;
-    }
+          const acessoAtual =
+            await obterAcessoOperacional(
+              user.id
+            );
 
-    if (!perfil || perfil.tipo_usuario !== "admin") {
-      router.push("/area-cliente");
-      return;
-    }
+          if (
+            !acessoAtual.ativo
+          ) {
+            await supabase.auth.signOut();
 
-    const { data, error } = await supabase
-      .from("retiradas_pedido")
-      .select(`
-        id,
-        sequencia,
-        checkin_em,
-        status,
+            router.push(
+              "/login"
+            );
 
-        pedidos (
-          numero_pedido,
-          total
-        ),
+            return;
+          }
 
-        unidades (
-          id,
-          codigo,
-          nome
-        ),
+          /*
+           * Para abrir a fila, o usuário precisa
+           * possuir a capacidade de retirada
+           * ou ser administrador.
+           */
+          if (
+            !acessoAtual.podeAcessarFilaRetirada
+          ) {
+            if (
+              acessoAtual.podeAcessarPedidos
+            ) {
+              router.push(
+                "/admin/pedidos"
+              );
+            } else {
+              router.push(
+                "/area-cliente"
+              );
+            }
 
-        pontos_retirada (
-          nome
-        )
-      `)
-      .eq("status", "cliente_no_local")
-      .not("checkin_em", "is", null)
-      .eq("unidades.codigo", CODIGO_UNIDADE_ATUAL)
-      .order("checkin_em", {
-        ascending: true,
-      });
+            return;
+          }
 
-    if (error) {
-      setMensagem(
-        `Erro ao carregar fila: ${error.message}`
-      );
+          setAcesso(
+            acessoAtual
+          );
 
-      setCarregando(false);
-      return;
-    }
+          /*
+           * ===========================================
+           * FILA DE RETIRADA
+           * ===========================================
+           */
 
-    const retiradasFiltradas =
-      ((data ?? []) as unknown as RetiradaFila[]).filter(
-        (retirada) =>
-          retirada.unidades?.codigo ===
-          CODIGO_UNIDADE_ATUAL
-      );
+          const {
+            data,
+            error,
+          } =
+            await supabase
+              .from(
+                "retiradas_pedido"
+              )
+              .select(`
+                id,
+                sequencia,
+                checkin_em,
+                status,
 
-    setRetiradas(retiradasFiltradas);
-    setMensagem("");
-    setCarregando(false);
-  }, [router]);
+                pedidos (
+                  numero_pedido,
+                  total
+                ),
+
+                unidades (
+                  id,
+                  codigo,
+                  nome
+                ),
+
+                pontos_retirada (
+                  nome
+                )
+              `)
+              .eq(
+                "status",
+                "cliente_no_local"
+              )
+              .not(
+                "checkin_em",
+                "is",
+                null
+              )
+              .eq(
+                "unidades.codigo",
+                CODIGO_UNIDADE_ATUAL
+              )
+              .order(
+                "checkin_em",
+                {
+                  ascending:
+                    true,
+                }
+              );
+
+          if (
+            error
+          ) {
+            setMensagem(
+              `Erro ao carregar fila: ${error.message}`
+            );
+
+            setCarregando(
+              false
+            );
+
+            return;
+          }
+
+          const retiradasFiltradas =
+            (
+              (
+                data ??
+                []
+              ) as unknown as RetiradaFila[]
+            ).filter(
+              (
+                retirada
+              ) =>
+                retirada
+                  .unidades
+                  ?.codigo ===
+                CODIGO_UNIDADE_ATUAL
+            );
+
+          setRetiradas(
+            retiradasFiltradas
+          );
+
+          setMensagem(
+            ""
+          );
+
+          setCarregando(
+            false
+          );
+        } catch (
+          error
+        ) {
+          console.error(
+            "Erro ao carregar fila de retirada:",
+            error
+          );
+
+          setMensagem(
+            error instanceof
+              Error
+              ? error.message
+              : "Não foi possível carregar a fila de retirada."
+          );
+
+          setCarregando(
+            false
+          );
+        }
+      },
+      [
+        router,
+      ]
+    );
 
   useEffect(() => {
-    const primeiraCarga = window.setTimeout(() => {
-      carregarFila();
-      setAgora(new Date().getTime());
-    }, 0);
+    const primeiraCarga =
+      window.setTimeout(
+        () => {
+          void carregarFila();
 
-    const intervalo = window.setInterval(() => {
-      carregarFila();
-      setAgora(new Date().getTime());
-    }, 5000);
+          setAgora(
+            new Date().getTime()
+          );
+        },
+        0
+      );
+
+    const intervalo =
+      window.setInterval(
+        () => {
+          void carregarFila();
+
+          setAgora(
+            new Date().getTime()
+          );
+        },
+        5000
+      );
 
     return () => {
-      window.clearTimeout(primeiraCarga);
-      window.clearInterval(intervalo);
-    };
-  }, [carregarFila]);
+      window.clearTimeout(
+        primeiraCarga
+      );
 
-  function formatarHora(data: string) {
-    return new Date(data).toLocaleTimeString(
+      window.clearInterval(
+        intervalo
+      );
+    };
+  }, [
+    carregarFila,
+  ]);
+
+  function formatarHora(
+    data: string
+  ) {
+    return new Date(
+      data
+    ).toLocaleTimeString(
       "pt-BR",
       {
-        hour: "2-digit",
-        minute: "2-digit",
+        hour:
+          "2-digit",
+        minute:
+          "2-digit",
       }
     );
   }
 
-  function calcularTempoEspera(data: string) {
-    if (agora === null) {
+  function calcularTempoEspera(
+    data: string
+  ) {
+    if (
+      agora === null
+    ) {
       return "calculando...";
     }
 
-    const chegada = new Date(data).getTime();
+    const chegada =
+      new Date(
+        data
+      ).getTime();
 
-    const minutos = Math.max(
-      0,
-      Math.floor((agora - chegada) / 60000)
-    );
+    const minutos =
+      Math.max(
+        0,
+        Math.floor(
+          (
+            agora -
+            chegada
+          ) /
+            60000
+        )
+      );
 
-    if (minutos === 0) {
+    if (
+      minutos ===
+      0
+    ) {
       return "agora";
     }
 
-    if (minutos === 1) {
+    if (
+      minutos ===
+      1
+    ) {
       return "há 1 min";
     }
 
-    if (minutos < 60) {
+    if (
+      minutos <
+      60
+    ) {
       return `há ${minutos} min`;
     }
 
-    const horas = Math.floor(minutos / 60);
-    const minutosRestantes = minutos % 60;
+    const horas =
+      Math.floor(
+        minutos /
+          60
+      );
+
+    const minutosRestantes =
+      minutos %
+      60;
 
     if (
-      horas === 1 &&
-      minutosRestantes === 0
+      horas ===
+        1 &&
+      minutosRestantes ===
+        0
     ) {
       return "há 1 hora";
     }
 
-    if (minutosRestantes === 0) {
+    if (
+      minutosRestantes ===
+      0
+    ) {
       return `há ${horas} horas`;
     }
 
     return `há ${horas}h ${minutosRestantes}min`;
   }
 
-  function formatarValor(valor: number) {
-    return Number(valor).toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    });
+  function formatarValor(
+    valor: number
+  ) {
+    return Number(
+      valor
+    ).toLocaleString(
+      "pt-BR",
+      {
+        style:
+          "currency",
+        currency:
+          "BRL",
+      }
+    );
   }
 
-  if (carregando) {
+  if (
+    carregando
+  ) {
     return (
       <main className="min-h-screen bg-white p-10 text-black">
-        <p>Carregando painel de retirada...</p>
+        <p>
+          Carregando painel de retirada...
+        </p>
       </main>
     );
   }
@@ -218,14 +441,19 @@ export default function FilaRetiradaPage() {
   return (
     <main className="min-h-screen bg-white p-6 text-black md:p-10">
       <div className="mx-auto max-w-6xl">
+
         <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
+
           <div>
             <p className="text-sm font-semibold uppercase tracking-widest text-gray-500">
               O Box Driver
             </p>
 
             <h1 className="mt-2 text-4xl font-bold">
-              Painel de Retirada — {NOME_UNIDADE_ATUAL}
+              Painel de Retirada —{" "}
+              {
+                NOME_UNIDADE_ATUAL
+              }
             </h1>
 
             <p className="mt-3 text-lg text-gray-600">
@@ -234,28 +462,39 @@ export default function FilaRetiradaPage() {
           </div>
 
           <div className="flex flex-col gap-3 sm:flex-row">
+
             <div className="rounded-2xl border border-gray-300 px-6 py-4">
               <p className="text-sm text-gray-500">
                 Aguardando
               </p>
 
               <p className="text-4xl font-bold">
-                {retiradas.length}
+                {
+                  retiradas.length
+                }
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => router.push("/admin/pedidos")}
-              className="rounded-2xl border border-gray-300 px-6 py-4 font-semibold"
-            >
-              Ver todos os pedidos
-            </button>
+            {acesso?.podeAcessarPedidos && (
+              <button
+                type="button"
+                onClick={() =>
+                  router.push(
+                    "/admin/pedidos"
+                  )
+                }
+                className="rounded-2xl border border-gray-300 px-6 py-4 font-semibold"
+              >
+                Ver todos os pedidos
+              </button>
+            )}
+
           </div>
         </div>
 
         <div className="mb-6 rounded-xl border border-green-300 bg-green-50 px-5 py-4">
           <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+
             <div>
               <p className="font-semibold text-green-800">
                 Painel operacional ativo
@@ -269,17 +508,22 @@ export default function FilaRetiradaPage() {
             <p className="text-sm font-semibold text-green-700">
               Atualização automática a cada 5 segundos
             </p>
+
           </div>
         </div>
 
         {mensagem && (
           <div className="mb-6 rounded-lg border border-red-300 bg-red-50 p-4">
-            {mensagem}
+            {
+              mensagem
+            }
           </div>
         )}
 
-        {retiradas.length === 0 ? (
+        {retiradas.length ===
+        0 ? (
           <div className="rounded-3xl border border-gray-300 p-14 text-center">
+
             <p className="text-3xl font-bold">
               Nenhum cliente aguardando
             </p>
@@ -287,11 +531,16 @@ export default function FilaRetiradaPage() {
             <p className="mt-3 text-lg text-gray-500">
               Assim que um cliente fizer check-in no totem, ele aparecerá automaticamente aqui.
             </p>
+
           </div>
         ) : (
           <div className="space-y-4">
+
             {retiradas.map(
-              (retirada, index) => {
+              (
+                retirada,
+                index
+              ) => {
                 const pedido =
                   retirada.pedidos;
 
@@ -303,33 +552,57 @@ export default function FilaRetiradaPage() {
 
                 return (
                   <div
-                    key={retirada.id}
+                    key={
+                      retirada.id
+                    }
                     className="rounded-3xl border-2 border-gray-300 p-6"
                   >
+
                     <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
+
                       <div>
+
                         <div className="flex flex-wrap items-center gap-3">
+
                           <span className="rounded-full bg-black px-4 py-2 text-sm font-bold text-white">
-                            Fila #{index + 1}
+                            Fila #
+                            {
+                              index +
+                              1
+                            }
                           </span>
 
                           <h2 className="text-3xl font-bold">
                             Pedido nº{" "}
-                            {pedido?.numero_pedido ?? "-"}
+                            {
+                              pedido
+                                ?.numero_pedido ??
+                              "-"
+                            }
                           </h2>
+
                         </div>
 
                         <p className="mt-3 text-base font-semibold text-gray-600">
-                          Retirada {retirada.sequencia}
+                          Retirada{" "}
+                          {
+                            retirada.sequencia
+                          }
                         </p>
 
                         <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+
                           <div>
                             <p className="text-sm text-gray-500">
                               Unidade
                             </p>
+
                             <p className="font-bold">
-                              {unidade?.nome ?? "-"}
+                              {
+                                unidade
+                                  ?.nome ??
+                                "-"
+                              }
                             </p>
                           </div>
 
@@ -337,8 +610,13 @@ export default function FilaRetiradaPage() {
                             <p className="text-sm text-gray-500">
                               Ponto
                             </p>
+
                             <p className="font-bold">
-                              {ponto?.nome ?? "-"}
+                              {
+                                ponto
+                                  ?.nome ??
+                                "-"
+                              }
                             </p>
                           </div>
 
@@ -346,8 +624,11 @@ export default function FilaRetiradaPage() {
                             <p className="text-sm text-gray-500">
                               Check-in
                             </p>
+
                             <p className="font-bold">
-                              {formatarHora(retirada.checkin_em)}
+                              {formatarHora(
+                                retirada.checkin_em
+                              )}
                             </p>
                           </div>
 
@@ -355,8 +636,11 @@ export default function FilaRetiradaPage() {
                             <p className="text-sm text-gray-500">
                               Espera
                             </p>
+
                             <p className="font-bold">
-                              {calcularTempoEspera(retirada.checkin_em)}
+                              {calcularTempoEspera(
+                                retirada.checkin_em
+                              )}
                             </p>
                           </div>
 
@@ -364,12 +648,16 @@ export default function FilaRetiradaPage() {
                             <p className="text-sm text-gray-500">
                               Total do pedido
                             </p>
+
                             <p className="font-bold">
                               {pedido
-                                ? formatarValor(pedido.total)
+                                ? formatarValor(
+                                    pedido.total
+                                  )
                                 : "-"}
                             </p>
                           </div>
+
                         </div>
                       </div>
 
@@ -384,23 +672,30 @@ export default function FilaRetiradaPage() {
                       >
                         Atender retirada
                       </button>
+
                     </div>
                   </div>
                 );
               }
             )}
+
           </div>
         )}
 
         <div className="mt-8">
+
           <button
             type="button"
-            onClick={carregarFila}
+            onClick={() =>
+              void carregarFila()
+            }
             className="w-full rounded-xl border border-gray-300 p-4 font-semibold"
           >
             Atualizar agora
           </button>
+
         </div>
+
       </div>
     </main>
   );

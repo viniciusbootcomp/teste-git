@@ -14,6 +14,11 @@ import {
 
 import { supabase } from "@/lib/supabase";
 
+import {
+  obterAcessoOperacional,
+  type AcessoOperacional,
+} from "@/lib/auth/permissoes-operacionais";
+
 type Pedido = {
   id: string;
   numero_pedido: number;
@@ -92,8 +97,6 @@ type RetornoEntrega = {
   status: string;
 };
 
-type TipoUsuario = "admin" | "separacao";
-
 export default function AdminRetiradaDetalhePage() {
   const params = useParams();
   const router = useRouter();
@@ -155,8 +158,8 @@ export default function AdminRetiradaDetalhePage() {
     setRetiradaConcluida,
   ] = useState(false);
 
-  const [tipoUsuario, setTipoUsuario] =
-    useState<TipoUsuario | null>(null);
+  const [acesso, setAcesso] =
+  useState<AcessoOperacional | null>(null);
 
   function limparTimerMensagem() {
     if (
@@ -209,37 +212,26 @@ export default function AdminRetiradaDetalhePage() {
         return;
       }
 
-      const {
-        data: perfil,
-        error: perfilError,
-      } = await supabase
-        .from("perfil_cliente")
-        .select("tipo_usuario")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (perfilError) {
-        setMensagem(
-          `Erro ao verificar acesso: ${perfilError.message}`
+      const acessoAtual =
+        await obterAcessoOperacional(
+          user.id
         );
 
-        setCarregando(false);
+      if (!acessoAtual.ativo) {
+        await supabase.auth.signOut();
+        router.push("/login");
         return;
       }
 
       if (
-        !perfil ||
-        !["admin", "separacao"].includes(
-          perfil.tipo_usuario
-        )
+        !acessoAtual.podeSeparar &&
+        !acessoAtual.podeRetirar
       ) {
         router.push("/area-cliente");
         return;
       }
 
-      setTipoUsuario(
-        perfil.tipo_usuario as TipoUsuario
-      );
+      setAcesso(acessoAtual);
 
       const {
         data: retiradaData,
@@ -536,7 +528,7 @@ export default function AdminRetiradaDetalhePage() {
     if (
       !pedido ||
       !retirada ||
-      tipoUsuario !== "admin"
+      !acesso?.podeRetirar
     ) {
       return;
     }
@@ -704,15 +696,16 @@ export default function AdminRetiradaDetalhePage() {
     retirada.unidades;
 
   const podeIniciarSeparacao =
+    acesso?.podeSeparar === true &&
     pedido.status_pagamento ===
       "aprovado" &&
     retirada.status ===
       "recebido";
 
   const podeConfirmarEntrega =
-    tipoUsuario === "admin" &&
+    acesso?.podeRetirar === true &&
     retirada.status ===
-    "cliente_no_local";
+      "cliente_no_local";
 
   return (
     <main className="min-h-screen bg-white p-10 text-black">
@@ -1124,7 +1117,9 @@ export default function AdminRetiradaDetalhePage() {
           type="button"
           onClick={() =>
             router.push(
-              `/admin/pedidos/${pedido.numero_pedido}`
+              acesso?.podeAcessarPedidos
+                ? `/admin/pedidos/${pedido.numero_pedido}`
+                : "/admin/retirada/fila"
             )
           }
           className="mt-8 w-full rounded-lg border border-gray-300 p-3 font-semibold"
