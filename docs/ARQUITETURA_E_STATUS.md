@@ -1,46 +1,79 @@
 # O Box Driver — Arquitetura e Status do Projeto
 
-> Documento vivo do projeto **O Box Driver — Protótipo / Sandbox**. Atualizar a cada bloco relevante concluído.
+> Documento vivo do projeto **O Box Driver — Fase 1 / Homologação**.
+> Atualizar ao concluir blocos relevantes, antes dos respectivos checkpoints de Git.
 
 ## 1. Objetivo
 
-Registrar arquitetura, decisões técnicas, regras de negócio, módulos implementados, migrations, segurança, pendências e próximos passos.
+Registrar arquitetura, decisões técnicas, regras de negócio, módulos implementados,
+migrations, segurança, pendências e próximos passos.
 
-Este documento **não é a documentação final de produção**. Ele é a referência viva do protótipo e servirá de base para o futuro aplicativo oficial.
+A Fase 1 tem dois objetivos simultâneos:
 
-## 2. Classificação do projeto atual
+1. validar na prática se o modelo de negócio funciona;
+2. construir uma fundação técnica que possa evoluir sem reconstrução caso o produto escale.
 
-O projeto atual é:
+Princípio central:
 
-- protótipo funcional;
-- sandbox;
-- ambiente de demonstração;
-- laboratório técnico;
-- referência de arquitetura.
+> **Simples no uso, preparada no núcleo.**
 
-Ele **não deve ser convertido diretamente em produção**.
+Não devem ser construídos antecipadamente módulos de franquia, royalties, gestão regional,
+repasse financeiro ou outras estruturas que ainda não fazem parte da operação real.
+Entretanto, decisões de baixo custo agora devem evitar amarrações que impeçam futura
+expansão para múltiplas unidades e franquias.
 
-Quando o projeto comercial for iniciado oficialmente, criar ambiente separado com:
+## 2. Classificação do ambiente atual
 
-- novo repositório;
-- novo Supabase;
-- novo banco;
-- novas credenciais;
-- nova aplicação Mercado Pago;
+O projeto atual é o **ambiente oficial de homologação da Fase 1**.
+
+Uso:
+
+- desenvolvimento local;
+- testes;
+- demonstrações;
+- validação com o idealizador;
+- validação operacional;
+- referência de arquitetura;
+- preparação para produção.
+
+Este ambiente **não deve ser convertido diretamente em produção**.
+
+Fluxo alvo:
+
+```text
+desenvolvimento local
+→ homologação estável
+→ produção limpa
+```
+
+Produção futura deverá possuir, no mínimo:
+
+- ambiente separado;
+- Supabase separado;
+- banco limpo;
+- credenciais próprias;
+- aplicação Mercado Pago de produção;
 - domínio definitivo;
-- dados reais;
-- políticas e permissões revisadas;
-- monitoramento, logs e backups próprios.
+- usuários reais;
+- políticas revisadas;
+- logs;
+- backups;
+- monitoramento;
+- rate limiting;
+- política de secrets.
 
 ## 3. Stack técnica
 
 Frontend:
-- Next.js 16
+
+- Next.js 16.3.4
 - React
 - TypeScript
 - Tailwind CSS
+- lucide-react
 
 Backend:
+
 - Next.js Route Handlers
 - Supabase
 - PostgreSQL
@@ -48,6 +81,7 @@ Backend:
 - Supabase Storage
 
 Integrações:
+
 - Mercado Pago
 - qrcode.react
 - html5-qrcode
@@ -71,81 +105,94 @@ https://github.com/viniciusbootcomp/teste-git.git
 
 - navegador nunca é fonte confiável para preço, estoque, status ou pagamento;
 - segredos ficam somente no backend;
-- validações críticas devem ocorrer no servidor;
-- RLS deve restringir o acesso direto ao banco;
-- operações administrativas sensíveis passam por backend seguro;
+- validações críticas devem ocorrer no servidor/banco;
+- RLS restringe acesso direto ao banco;
+- operações administrativas sensíveis devem ser protegidas server-side;
 - pagamentos são confirmados pelo backend/webhook;
 - QR Codes usam token seguro;
 - operações críticas devem ser auditáveis;
 - arquitetura preparada para múltiplas unidades;
-- arquitetura preparada para rede/franquia;
-- o protótipo deve manter qualidade suficiente para servir como base futura.
+- arquitetura preparada para evolução para rede/franquia;
+- não antecipar módulos de expansão sem necessidade real;
+- mudanças estruturais de banco sempre possuem migration;
+- decisões arquiteturais relevantes devem possuir ADR;
+- o ambiente de homologação deve manter qualidade de engenharia compatível com futura produção.
 
-## 5. Modelo de negócio
-
-Fluxo principal:
+## 5. Fluxo principal de negócio
 
 ```text
 COMPRE → PAGUE → RETIRE → INSTALE
 ```
 
-O cliente compra pelo aplicativo, paga, recebe confirmação e QR Code, dirige-se à unidade/container, faz check-in no totem e retira a mercadoria.
+O cliente:
 
-Na fase inicial não há entrega.
+1. acessa o catálogo;
+2. adiciona produtos;
+3. reserva estoque;
+4. realiza pagamento;
+5. acompanha o pedido;
+6. recebe liberação para retirada;
+7. apresenta QR/check-in;
+8. retira os materiais.
+
+Na Fase 1 não há entrega ao endereço do cliente.
 
 ## 6. Pedido comercial e retiradas
 
 Um pedido comercial pode possuir **1 ou N retiradas**.
 
-Exemplo:
-
-```text
-Pedido 500
-23 silicones
-
-Retirada 1 — Mogi: 20
-Retirada 2 — Suzano: 3
-```
-
 Regras:
 
-- um pagamento por pedido;
-- cada retirada possui unidade própria;
-- cada retirada possui QR próprio;
+- um pagamento por pedido comercial;
+- cada retirada pertence a uma unidade;
 - cada retirada possui estado operacional próprio;
-- separação, check-in e entrega acontecem por retirada.
+- separação acontece por retirada;
+- check-in acontece por retirada;
+- entrega física acontece por retirada;
+- arquitetura permite futura divisão entre unidades.
 
-## 7. Estoque e múltiplas unidades
+Fluxo operacional validado:
 
-O catálogo deve exibir o estoque total da rede e a distribuição por unidade.
+```text
+compra
+→ pagamento aprovado
+→ recebido
+→ em separação
+→ pronto para retirada
+→ cliente no local
+→ entregue
+```
 
-A lógica desejada:
+## 7. Estoque e unidades
 
-1. tentar atender por uma única unidade;
-2. se não for possível, usar o menor número de unidades;
+O catálogo exibe disponibilidade da rede.
+
+Prioridade da futura distribuição:
+
+1. atender por uma única unidade;
+2. se impossível, usar o menor número de unidades;
 3. futuramente considerar proximidade;
-4. permitir confirmação da divisão pelo cliente.
+4. permitir confirmação da divisão pelo cliente quando necessário.
 
-Mesmo com uma unidade no lançamento, a arquitetura permanece preparada para várias.
+A Fase 1 inicia com operação enxuta, mas estoque e retirada permanecem associados a unidade.
 
-## 8. Estrutura de rede
+## 8. Estrutura de expansão
+
+Modelo conceitual:
 
 ```text
 Rede
-└── Franqueado / Operação
+└── Operação / Franqueado
     └── Unidade / Container
         ├── Estoque
         ├── Totem
-        └── Retirada
+        └── Retiradas
 ```
 
-Operação própria pode usar:
+A existência dessa estrutura não significa que todos os módulos de franquia serão
+implementados na Fase 1.
 
-```text
-tipo = propria
-```
-
-## 9. Perfis de usuário
+## 9. Usuários, perfis e capacidades
 
 Perfis previstos:
 
@@ -159,11 +206,39 @@ separacao
 retirada
 ```
 
-O perfil `admin` permanece como administrador geral do protótipo.
+A partir da migration 042, capacidades operacionais podem ser acumuladas.
 
-## 10. Autenticação
+Tabela:
 
-Rotas existentes:
+```text
+usuario_permissoes
+```
+
+Exemplo:
+
+```text
+Henrique
+perfil principal: separacao
+
+capacidades:
+- separacao
+- retirada
+```
+
+Isso permite operação enxuta, em que a mesma pessoa pode separar e entregar materiais.
+
+Função central criada:
+
+```sql
+public.usuario_atual_tem_permissao(text)
+```
+
+O campo `perfil_cliente.tipo_usuario` permanece como perfil principal e compatibilidade
+durante a transição.
+
+## 10. Autenticação e destino pós-login
+
+Rotas:
 
 ```text
 /cadastro
@@ -173,161 +248,52 @@ Rotas existentes:
 /area-cliente
 ```
 
-A autenticação utiliza Supabase Auth.
-
-Usuários internos são criados pelo backend com `supabaseAdmin`. A `SUPABASE_SERVICE_ROLE_KEY` nunca deve ser exposta no navegador.
-
-Fluxo de criação interna:
-
-1. administrador cadastra o usuário;
-2. backend cria no Supabase Auth;
-3. backend cria o perfil em `perfil_cliente`;
-4. senha temporária forte é gerada internamente;
-5. senha temporária não é devolvida ao navegador;
-6. usuário usa o fluxo de recuperação para definir a própria senha.
-
-## 11. Usuários administrativos
-
-Status: **implementado e testado**.
-
-Rotas:
+O redirecionamento pós-login foi centralizado em:
 
 ```text
-/admin/usuarios
-/admin/usuarios/[id]
+src/lib/auth/destino-pos-login.ts
 ```
 
-APIs:
+Regra atual:
 
 ```text
-/api/admin/usuarios
-/api/admin/usuarios/[id]
+cliente → /
+admin/admin_rede → /admin/pedidos
+separacao → /admin/pedidos
+retirada → /admin/retirada/fila
+separacao + retirada → /admin/pedidos
 ```
 
-Funcionalidades:
+O catálogo (`/`) é a tela inicial do cliente.
 
-- listar usuários internos;
-- buscar por nome, e-mail ou perfil;
-- criar usuário;
-- editar usuário;
-- alterar nome, e-mail e telefone;
-- trocar perfil;
-- ativar/inativar;
-- vincular unidade;
-- vincular franqueado/operação;
-- mostrar último login;
-- impedir auto-inativação;
-- impedir remoção acidental do próprio perfil administrativo.
+## 11. Experiência do cliente
 
-## 12. Produtos
+Status: **funcional para a Fase 1 atual**.
 
-Status: **implementado e testado**.
+Fluxos já disponíveis:
 
-Rotas:
+- login;
+- catálogo;
+- busca de produtos;
+- acesso à Área do Cliente;
+- carrinho;
+- checkout;
+- pagamento;
+- confirmação de pedido;
+- acompanhamento de pedido;
+- QR quando a retirada está pronta;
+- notificações;
+- retorno da Área do Cliente para o catálogo.
+
+Cabeçalho do catálogo:
 
 ```text
-/admin/produtos
-/admin/produtos/novo
-/admin/produtos/[id]
-/admin/produtos/importar
+perfil | busca | notificações
 ```
 
-Funcionalidades:
+O bloco de perfil está preparado para futura foto do usuário.
 
-- listagem;
-- busca;
-- filtro por status;
-- cadastro;
-- edição;
-- código único;
-- descrição;
-- categoria;
-- preço;
-- status;
-- upload de imagem;
-- remoção/substituição de imagem.
-
-## 13. Categorias
-
-Status: **implementado e testado**.
-
-Rotas:
-
-```text
-/admin/categorias
-/admin/categorias/novo
-/admin/categorias/[id]
-```
-
-Funcionalidades:
-
-- listar;
-- buscar;
-- filtrar;
-- criar;
-- editar;
-- ativar/inativar;
-- código automático;
-- validação de duplicidade.
-
-Tabela:
-
-```text
-categorias_produto
-```
-
-O produto usa `categoria_id`. O campo legado `categoria` permanece temporariamente por compatibilidade.
-
-## 14. Importação e exportação de produtos
-
-Status: **implementado e testado**.
-
-Tela:
-
-```text
-/admin/produtos/importar
-```
-
-Opções:
-
-```text
-Baixar modelo Excel
-Baixar produtos existentes
-```
-
-Colunas:
-
-```text
-codigo
-nome
-descricao
-categoria
-preco
-ativo
-```
-
-A importação identifica:
-
-- novos;
-- existentes;
-- erros;
-- categoria inválida;
-- preço inválido;
-- código duplicado;
-- status inválido.
-
-Modos:
-
-```text
-Ignorar existentes
-Atualizar existentes
-```
-
-A planilha não altera imagens.
-
-## 15. Pagamentos
-
-Fluxos principais do protótipo já funcionam.
+## 12. Pagamentos
 
 Implementado:
 
@@ -335,41 +301,103 @@ Implementado:
 - cartão de crédito;
 - Payment Brick;
 - webhook;
-- confirmação de pagamento;
-- integração com pedido.
+- reconciliação PIX;
+- criação de pedido após aprovação;
+- proteção contra processamento concorrente em pontos já tratados.
 
-Arquitetura preparada para débito e refinamentos de reconciliação.
-
-O protótipo deve permanecer em sandbox:
+Homologação deve permanecer em sandbox:
 
 ```env
 MERCADO_PAGO_ENV=sandbox
 ```
 
-## 16. QR Code, retirada e totem
+Build de produção exigiu uso correto de `Suspense` nas rotas que utilizam
+`useSearchParams()`:
 
-Fluxo:
+```text
+/pagamento
+/pedido-sucesso
+```
 
-1. pagamento aprovado;
-2. retirada liberada;
-3. QR Code gerado;
-4. cliente chega à unidade;
-5. totem lê QR;
-6. sistema valida token;
-7. retirada entra em check-in;
-8. equipe entrega;
-9. retirada é concluída.
+## 13. Operação — separação
 
-A arquitetura considera:
+Perfil/capacidade `separacao` já consegue:
 
-- QR por retirada;
-- token seguro;
-- proteção contra reutilização;
-- validação de unidade;
-- status operacional;
-- ativação segura de totem por HMAC/cookie.
+- acessar pedidos compatíveis;
+- abrir retirada;
+- iniciar separação;
+- ler/conferir produtos;
+- concluir a separação;
+- alterar retirada para `pronto_retirada`.
 
-## 17. Segurança
+RPCs ajustadas para permitir `admin` e separação:
+
+```text
+iniciar_separacao_retirada
+registrar_leitura_separacao_retirada
+```
+
+A entrega física continua separada da permissão de separação.
+
+## 14. Operação — retirada
+
+Fluxo existente:
+
+```text
+cliente faz check-in
+→ retirada entra na fila
+→ painel operacional atualiza
+→ equipe atende
+→ entrega é confirmada
+```
+
+Tela principal:
+
+```text
+/admin/retirada/fila
+```
+
+Próximo bloco administrativo deve concluir o uso real da capacidade `retirada`,
+inclusive para usuários que também possuem `separacao`.
+
+## 15. Notificações
+
+Arquitetura atual:
+
+- notificações do cliente para eventos relevantes;
+- operação interna orientada por painéis;
+- notificações internas reservadas para exceções e alertas relevantes.
+
+Leitura individual:
+
+```text
+notificacoes
+notificacoes_leitura
+```
+
+A leitura é por usuário. Uma notificação de perfil/unidade não se torna lida para todos
+quando apenas uma pessoa a abre.
+
+Evento validado de ponta a ponta:
+
+```text
+retirada pronta
+→ notificação individual para o cliente
+→ sino mostra não lida
+→ clique direciona ao pedido
+```
+
+A notificação automática:
+
+```text
+pedido pago → separacao
+```
+
+foi implementada e validada tecnicamente, mas a decisão atual é **não usar eventos
+operacionais normais como notificação interna padrão**, pois o painel é a fonte de trabalho.
+Esse trigger deve ser desativado/ajustado em bloco futuro documentado.
+
+## 16. Segurança
 
 Requisitos permanentes:
 
@@ -382,37 +410,19 @@ Requisitos permanentes:
 - proteção contra manipulação de preço;
 - proteção contra manipulação de estoque;
 - proteção contra manipulação de status;
-- proteção de pagamentos;
+- proteção financeira;
 - rate limiting;
 - logs;
 - backups;
 - QR seguro;
 - proteção contra replay;
+- validação de unidade;
 - LGPD.
 
-## 18. Banco de dados
+RLS do perfil `separacao` utiliza funções `SECURITY DEFINER` para evitar recursão entre
+policies relacionadas a pedidos e retiradas.
 
-Banco:
-
-```text
-Supabase / PostgreSQL
-```
-
-Projeto:
-
-```text
-obox-driver-teste
-```
-
-Região:
-
-```text
-São Paulo
-```
-
-RLS está habilitada nas tabelas relevantes.
-
-## 19. Migrations
+## 17. Banco e migrations recentes
 
 Baseline:
 
@@ -420,39 +430,51 @@ Baseline:
 20260904_001_base_atual.sql
 ```
 
-Migrations recentes importantes:
+Migrations relevantes deste marco:
 
 ```text
-20260909_029_storage_produtos.sql
-20260909_030_rls_admin_produtos.sql
-20260909_031_codigo_unico_produtos.sql
-20260909_032_categorias_produto.sql
-20260909_033_usuarios_administrativos.sql
-20260909_034_grants_api_admin_usuarios.sql
+20260914_037_notificacoes_leitura_individual.sql
+20260914_038_notificacao_retirada_pronta_cliente.sql
+20260914_039_permissoes_perfil_separacao.sql
+20260914_040_rls_leitura_perfil_separacao.sql
+20260914_041_corrige_recursao_rls_separacao.sql
+20260914_042_permissoes_operacionais_multiplas.sql
 ```
 
-Observação: existem migrations antigas 003, 008 e 011 com nomes fora do padrão. Revisar futuramente.
+Observação:
 
-## 20. Storage
+- a migration 040 foi aplicada;
+- a migration 041 corrige a recursão introduzida pelas policies da 040;
+- ambas permanecem versionadas para reproduzir corretamente a evolução do banco.
 
-Bucket:
+## 18. Build e qualidade
+
+Em 14/09/2026 o projeto foi validado com:
+
+```powershell
+npm run build
+```
+
+Resultado:
 
 ```text
-produtos
+Compiled successfully
+Finished TypeScript
+Generated static pages 45/45
+Finalized page optimization
 ```
 
-Uso:
+Build de produção: **aprovado**.
 
-- imagens de produtos.
+Também foi executado:
 
-Regras atuais:
+```powershell
+git diff --check
+```
 
-- leitura pública;
-- gravação administrativa;
-- limite de tamanho configurado;
-- JPEG / PNG / WEBP.
+sem erros relevantes de whitespace.
 
-## 21. Git e versionamento
+## 19. Git e checkpoints
 
 Branch principal:
 
@@ -460,112 +482,99 @@ Branch principal:
 main
 ```
 
-Checkpoint importante:
+Checkpoint anterior:
 
 ```text
-4ac0016
-Implementa produtos categorias e importacao em massa
+5278504
+Marco homologacao inicial apos aprovacao do cliente
 ```
 
-Fluxo recomendado:
+Tag:
 
 ```text
-concluir bloco
-→ testar
-→ aplicar migration
-→ validar
+homologacao-inicial-fase1
+```
+
+O checkpoint deste documento deve registrar:
+
+- leitura individual de notificações;
+- notificação de retirada pronta;
+- permissões de separação;
+- permissões operacionais múltiplas;
+- navegação pós-login;
+- melhorias da experiência do cliente;
+- correções de build do Next.js.
+
+## 20. ADRs
+
+Diretório:
+
+```text
+docs/adr/
+```
+
+ADRs atuais:
+
+```text
+ADR-001-fase1-simples-no-uso-preparada-no-nucleo.md
+ADR-002-pedido-comercial-com-multiplas-retiradas.md
+ADR-003-permissoes-operacionais-acumulaveis.md
+ADR-004-painel-operacional-como-fonte-de-trabalho.md
+ADR-005-separacao-homologacao-producao.md
+```
+
+## 21. Pendências prioritárias
+
+Antes de ampliar funcionalidades, priorizar:
+
+1. concluir capacidade `retirada` e acesso por permissões acumuláveis;
+2. revisar/remover notificação operacional padrão `pedido pago → separacao`;
+3. testar fluxo completo com contas distintas:
+   `cliente → separacao → retirada`;
+4. criar notificação `retirada concluída → cliente`;
+5. expiração automática de reservas;
+6. condição de corrida pagamento aprovado × reserva expirada;
+7. rate limiting;
+8. hardening server-side administrativo;
+9. proteção contra replay de QR;
+10. validação de QR por unidade;
+11. logs estruturados;
+12. backups;
+13. testes automatizados;
+14. deploy estável de homologação.
+
+## 22. Itens que não devem ser antecipados
+
+Não implementar na Fase 1 sem necessidade real:
+
+- royalties;
+- repasse entre franqueado e franqueadora;
+- portal de franquias completo;
+- gestão regional complexa;
+- dezenas de níveis hierárquicos;
+- regras comerciais por estado;
+- BI nacional;
+- infraestrutura distribuída prematuramente.
+
+Preparar estrutura quando barato; implementar módulo apenas quando houver necessidade real.
+
+## 23. Convenção de desenvolvimento
+
+Ciclo obrigatório por bloco:
+
+```text
+regra de negócio
+→ arquitetura
+→ segurança
+→ impacto em escala
+→ implementação
+→ teste técnico
+→ teste funcional
+→ documentação
 → commit
-→ push
-→ atualizar documentação
 ```
 
-## 22. Fluxos já validados
-
-Produtos:
-- cadastro;
-- edição;
-- imagem;
-- categoria;
-- exportação;
-- importação;
-- atualização em massa.
-
-Usuários:
-- criação;
-- listagem;
-- edição;
-- alteração de e-mail;
-- perfis;
-- status;
-- vínculo de unidade;
-- vínculo de franqueado/operação.
-
-Pagamentos:
-- PIX;
-- crédito;
-- webhook.
-
-Operação:
-- separação;
-- check-in;
-- entrega;
-- retirada.
-
-## 23. Próximos módulos
-
-Fila funcional atual:
-
-1. notificações internas;
-2. espaços de marketing/parceiros;
-3. refinamento de permissões por perfil;
-4. gestão administrativa de unidades/franqueados;
-5. PWA;
-6. melhorias operacionais.
-
-## 24. Pendências técnicas
-
-- expiração automática de reservas;
-- scheduler de reservas;
-- reconciliação genérica de pagamentos;
-- condição de corrida pagamento aprovado × reserva expirada;
-- atomicidade financeira;
-- rate limiting;
-- hardening server-side das áreas administrativas;
-- testes multiusuário;
-- proteção contra replay de QR;
-- validação de QR por unidade;
-- PWA;
-- deploy estável de demonstração;
-- testes automatizados;
-- README técnico;
-- logs estruturados;
-- backups;
-- refinamentos de webhook;
-- LGPD de produção;
-- 3DS e regras adicionais de cartão no app oficial.
-
-## 25. Aplicação oficial futura
-
-Ao iniciar produção, criar do zero a infraestrutura oficial:
-
-- novo Supabase;
-- novo banco;
-- novo app Mercado Pago;
-- novas credenciais;
-- novo domínio;
-- políticas de RLS revisadas;
-- auditoria;
-- logs;
-- backups;
-- monitoramento;
-- rate limiting;
-- política de secrets;
-- testes automatizados;
-- estratégia de recuperação.
-
-## 26. Convenções
-
-Toda mudança estrutural de banco deve possuir migration.
+Banco:
 
 ```text
 1. criar migration
@@ -575,51 +584,23 @@ Toda mudança estrutural de banco deve possuir migration.
 5. versionar no Git
 ```
 
-Backend sensível:
+Toda decisão arquitetural relevante deve ser registrada em ADR.
 
-```text
-src/app/api/
-```
+## 24. Estado atual resumido
 
-Frontend administrativo:
+Concluído/validado:
 
-```text
-src/app/admin/
-```
-
-Nunca expor no client:
-
-- `SUPABASE_SERVICE_ROLE_KEY`;
-- tokens privados;
-- credenciais privadas do Mercado Pago.
-
-## 27. Regra para manutenção deste documento
-
-Ao concluir um módulo:
-
-1. atualizar o status;
-2. registrar novas rotas;
-3. registrar novas APIs;
-4. registrar migrations;
-5. registrar decisões de arquitetura;
-6. registrar pendências;
-7. registrar commit importante.
-
-## 28. Estado atual resumido
-
-Concluído:
-
-- autenticação base;
+- autenticação;
 - catálogo;
-- estoque;
+- busca;
 - carrinho;
 - reservas;
 - pedido;
-- retiradas;
+- múltiplas retiradas;
 - PIX;
 - crédito;
 - webhook;
-- totem/QR;
+- QR/totem;
 - separação;
 - check-in;
 - entrega;
@@ -628,17 +609,23 @@ Concluído:
 - imagens;
 - Excel;
 - usuários administrativos;
-- arquitetura multiunidade;
-- arquitetura para franquia.
+- notificações individuais;
+- retirada pronta → cliente;
+- perfil `separacao`;
+- permissões operacionais múltiplas;
+- login com destino por perfil;
+- experiência principal do cliente;
+- build de produção aprovado.
 
-Próximo:
+Próximo foco:
 
-- notificações internas;
-- permissões por perfil;
-- gestão operacional;
-- marketing/parceiros;
-- documentação contínua.
+```text
+administração e operação interna
+→ capacidades separacao/retirada
+→ fluxo completo por perfis reais
+→ fechamento técnico da homologação Fase 1
+```
 
 ---
 
-**Última atualização:** setembro de 2026
+**Última atualização:** 14/09/2026

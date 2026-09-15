@@ -92,6 +92,8 @@ type RetornoEntrega = {
   status: string;
 };
 
+type TipoUsuario = "admin" | "separacao";
+
 export default function AdminRetiradaDetalhePage() {
   const params = useParams();
   const router = useRouter();
@@ -153,6 +155,9 @@ export default function AdminRetiradaDetalhePage() {
     setRetiradaConcluida,
   ] = useState(false);
 
+  const [tipoUsuario, setTipoUsuario] =
+    useState<TipoUsuario | null>(null);
+
   function limparTimerMensagem() {
     if (
       timerMensagemRef.current !==
@@ -192,12 +197,6 @@ export default function AdminRetiradaDetalhePage() {
     }, 100);
   }
 
-  /*
-   * =====================================================
-   * CARREGAMENTO DA RETIRADA
-   * =====================================================
-   */
-
   const carregarRetirada =
     useCallback(async () => {
       const {
@@ -209,10 +208,6 @@ export default function AdminRetiradaDetalhePage() {
         router.push("/login");
         return;
       }
-
-      /*
-       * ACESSO ADMIN
-       */
 
       const {
         data: perfil,
@@ -234,22 +229,17 @@ export default function AdminRetiradaDetalhePage() {
 
       if (
         !perfil ||
-        perfil.tipo_usuario !== "admin"
+        !["admin", "separacao"].includes(
+          perfil.tipo_usuario
+        )
       ) {
         router.push("/area-cliente");
         return;
       }
 
-      /*
-       * RETIRADA ESPECÍFICA
-       *
-       * Agora NÃO usamos mais:
-       *
-       * sequencia = 1
-       *
-       * A própria URL contém o UUID exato
-       * da retirada que será operada.
-       */
+      setTipoUsuario(
+        perfil.tipo_usuario as TipoUsuario
+      );
 
       const {
         data: retiradaData,
@@ -302,10 +292,6 @@ export default function AdminRetiradaDetalhePage() {
         retiradaCarregada
       );
 
-      /*
-       * PEDIDO COMERCIAL
-       */
-
       const {
         data: pedidoData,
         error: pedidoError,
@@ -343,10 +329,6 @@ export default function AdminRetiradaDetalhePage() {
       }
 
       setPedido(pedidoData);
-
-      /*
-       * SOMENTE ITENS DESTA RETIRADA
-       */
 
       const {
         data: itensData,
@@ -431,12 +413,6 @@ export default function AdminRetiradaDetalhePage() {
     }
   }, [retirada?.status]);
 
-  /*
-   * =====================================================
-   * INICIAR SEPARAÇÃO
-   * =====================================================
-   */
-
   async function iniciarSeparacao() {
     if (!retirada) {
       return;
@@ -480,12 +456,6 @@ export default function AdminRetiradaDetalhePage() {
 
     focarLeitor();
   }
-
-  /*
-   * =====================================================
-   * LEITURA DE PRODUTOS
-   * =====================================================
-   */
 
   async function registrarLeitura() {
     if (!retirada) {
@@ -562,14 +532,12 @@ export default function AdminRetiradaDetalhePage() {
     }
   }
 
-  /*
-   * =====================================================
-   * ENTREGA
-   * =====================================================
-   */
-
   async function confirmarEntrega() {
-    if (!pedido || !retirada) {
+    if (
+      !pedido ||
+      !retirada ||
+      tipoUsuario !== "admin"
+    ) {
       return;
     }
 
@@ -742,16 +710,13 @@ export default function AdminRetiradaDetalhePage() {
       "recebido";
 
   const podeConfirmarEntrega =
+    tipoUsuario === "admin" &&
     retirada.status ===
     "cliente_no_local";
 
   return (
     <main className="min-h-screen bg-white p-10 text-black">
       <div className="mx-auto max-w-4xl">
-        {/* =============================================
-            CABEÇALHO
-        ============================================== */}
-
         <div className="mb-8 flex flex-col justify-between gap-6 md:flex-row">
           <div>
             <p className="text-sm text-gray-500">
@@ -839,10 +804,6 @@ export default function AdminRetiradaDetalhePage() {
           </div>
         )}
 
-        {/* =============================================
-            PAGAMENTO
-        ============================================== */}
-
         {pedido.status_pagamento !==
           "aprovado" && (
           <div className="mb-6 rounded-lg border border-orange-300 bg-orange-50 p-4">
@@ -851,10 +812,6 @@ export default function AdminRetiradaDetalhePage() {
             o pagamento não foi aprovado.
           </div>
         )}
-
-        {/* =============================================
-            INICIAR SEPARAÇÃO
-        ============================================== */}
 
         {podeIniciarSeparacao && (
           <button
@@ -870,10 +827,6 @@ export default function AdminRetiradaDetalhePage() {
               : `Iniciar separação da Retirada ${retirada.sequencia}`}
           </button>
         )}
-
-        {/* =============================================
-            EM SEPARAÇÃO
-        ============================================== */}
 
         {retirada.status ===
           "em_separacao" && (
@@ -948,10 +901,6 @@ export default function AdminRetiradaDetalhePage() {
           </>
         )}
 
-        {/* =============================================
-            PRONTO
-        ============================================== */}
-
         {retirada.status ===
           "pronto_retirada" && (
           <div className="mb-8 rounded-xl border border-blue-300 bg-blue-50 p-6">
@@ -968,10 +917,6 @@ export default function AdminRetiradaDetalhePage() {
             </p>
           </div>
         )}
-
-        {/* =============================================
-            CLIENTE NO LOCAL
-        ============================================== */}
 
         {retirada.status ===
           "cliente_no_local" && (
@@ -997,10 +942,6 @@ export default function AdminRetiradaDetalhePage() {
           </div>
         )}
 
-        {/* =============================================
-            ENTREGUE
-        ============================================== */}
-
         {retirada.status ===
           "entregue" && (
           <div className="mb-8 rounded-xl border-2 border-green-400 bg-green-50 p-6">
@@ -1024,10 +965,6 @@ export default function AdminRetiradaDetalhePage() {
           </div>
         )}
 
-        {/* =============================================
-            ITENS DA RETIRADA
-        ============================================== */}
-
         <div className="space-y-4">
           {itens.map((item) => {
             const concluido =
@@ -1041,16 +978,6 @@ export default function AdminRetiradaDetalhePage() {
             const produto =
               item.itens_pedido;
 
-            /*
-             * IMPORTANTE:
-             *
-             * subtotal desta retirada =
-             * preço unitário *
-             * quantidade desta retirada.
-             *
-             * Não usamos mais o subtotal
-             * comercial completo do item.
-             */
             const subtotalRetirada =
               produto
                 ? Number(
@@ -1147,10 +1074,6 @@ export default function AdminRetiradaDetalhePage() {
           })}
         </div>
 
-        {/* =============================================
-            CONCLUÍDA AUTOMATICAMENTE
-        ============================================== */}
-
         {retirada.status ===
           "em_separacao" &&
           retiradaConcluida && (
@@ -1166,10 +1089,6 @@ export default function AdminRetiradaDetalhePage() {
               </p>
             </div>
           )}
-
-        {/* =============================================
-            ENTREGA
-        ============================================== */}
 
         {podeConfirmarEntrega && (
           <div className="mt-8 rounded-xl border-2 border-black p-6">
@@ -1200,10 +1119,6 @@ export default function AdminRetiradaDetalhePage() {
             </button>
           </div>
         )}
-
-        {/* =============================================
-            VOLTAR
-        ============================================== */}
 
         <button
           type="button"

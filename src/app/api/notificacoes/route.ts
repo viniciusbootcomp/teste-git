@@ -172,7 +172,8 @@ function podeVerNotificacao(
     !notificacao.user_id &&
     !notificacao.perfil_destino &&
     notificacao.unidade_id &&
-    notificacao.unidade_id === perfil.unidade_id
+    notificacao.unidade_id ===
+      perfil.unidade_id
   ) {
     return true;
   }
@@ -228,8 +229,6 @@ export async function GET(
         pedido_id,
         retirada_id,
         link,
-        lida,
-        lida_em,
         criada_por_user_id
       `
     )
@@ -254,15 +253,78 @@ export async function GET(
       )
   );
 
-  const naoLidasTotal = visiveis.filter(
-    (notificacao) => !notificacao.lida
-  ).length;
+  const idsVisiveis = visiveis.map(
+    (notificacao) => notificacao.id
+  );
+
+  let mapaLeituras = new Map<
+    string,
+    string
+  >();
+
+  if (idsVisiveis.length > 0) {
+    const {
+      data: leituras,
+      error: leiturasError,
+    } = await supabaseAdmin
+      .from("notificacoes_leitura")
+      .select(
+        `
+          notificacao_id,
+          lida_em
+        `
+      )
+      .eq(
+        "user_id",
+        usuarioLogado.user.id
+      )
+      .in(
+        "notificacao_id",
+        idsVisiveis
+      );
+
+    if (leiturasError) {
+      return respostaErro(
+        `Erro ao carregar leitura das notificações: ${leiturasError.message}`,
+        500
+      );
+    }
+
+    mapaLeituras = new Map(
+      (leituras ?? []).map(
+        (leitura) => [
+          leitura.notificacao_id,
+          leitura.lida_em,
+        ]
+      )
+    );
+  }
+
+  const visiveisComLeitura = visiveis.map(
+    (notificacao) => {
+      const lidaEm =
+        mapaLeituras.get(
+          notificacao.id
+        ) ?? null;
+
+      return {
+        ...notificacao,
+        lida: lidaEm !== null,
+        lida_em: lidaEm,
+      };
+    }
+  );
+
+  const naoLidasTotal =
+    visiveisComLeitura.filter(
+      (notificacao) => !notificacao.lida
+    ).length;
 
   const filtradas = somenteNaoLidas
-    ? visiveis.filter(
+    ? visiveisComLeitura.filter(
         (notificacao) => !notificacao.lida
       )
-    : visiveis;
+    : visiveisComLeitura;
 
   return NextResponse.json({
     ok: true,
@@ -412,7 +474,7 @@ export async function POST(
     }
   }
 
-  const { data, error } =
+  const { data: notificacaoCriada, error: insertError } =
     await supabaseAdmin
       .from("notificacoes")
       .insert({
@@ -425,8 +487,6 @@ export async function POST(
         pedido_id: pedidoId,
         retirada_id: retiradaId,
         link,
-        lida: false,
-        lida_em: null,
         criada_por_user_id:
           usuarioLogado.user.id,
       })
@@ -443,16 +503,14 @@ export async function POST(
           pedido_id,
           retirada_id,
           link,
-          lida,
-          lida_em,
           criada_por_user_id
         `
       )
       .single();
 
-  if (error) {
+  if (insertError) {
     return respostaErro(
-      `Erro ao criar notificação: ${error.message}`,
+      `Erro ao criar notificação: ${insertError.message}`,
       500
     );
   }
@@ -460,7 +518,11 @@ export async function POST(
   return NextResponse.json(
     {
       ok: true,
-      notificacao: data,
+      notificacao: {
+        ...notificacaoCriada,
+        lida: false,
+        lida_em: null,
+      },
     },
     {
       status: 201,

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { obterDestinoPosLogin } from "@/lib/auth/destino-pos-login";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,21 +14,53 @@ export default function LoginPage() {
   const [carregando, setCarregando] = useState(false);
 
   async function entrar() {
-    setCarregando(true);
-    setMensagem("");
-
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password: senha,
-    });
-
-    if (error) {
-      setMensagem(`Erro: ${error.message}`);
-      setCarregando(false);
+    if (carregando) {
       return;
     }
 
-    router.push("/area-cliente");
+    setCarregando(true);
+    setMensagem("");
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: senha,
+      });
+
+      if (error) {
+        setMensagem(`Erro: ${error.message}`);
+        return;
+      }
+
+      const userId = data.user?.id;
+
+      if (!userId) {
+        await supabase.auth.signOut();
+        setMensagem("Não foi possível identificar o usuário autenticado.");
+        return;
+      }
+
+      const destino = await obterDestinoPosLogin(userId);
+
+      router.replace(destino);
+      router.refresh();
+    } catch (error) {
+      const mensagemErro =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível concluir o login.";
+
+      await supabase.auth.signOut();
+      setMensagem(mensagemErro);
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  function tratarEnter(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      void entrar();
+    }
   }
 
   return (
@@ -43,6 +76,8 @@ export default function LoginPage() {
             placeholder="Seu e-mail"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={tratarEnter}
+            autoComplete="email"
             className="w-full rounded-lg border border-gray-300 p-3"
           />
 
@@ -51,13 +86,15 @@ export default function LoginPage() {
             placeholder="Sua senha"
             value={senha}
             onChange={(e) => setSenha(e.target.value)}
+            onKeyDown={tratarEnter}
+            autoComplete="current-password"
             className="w-full rounded-lg border border-gray-300 p-3"
           />
 
           <button
-            onClick={entrar}
+            onClick={() => void entrar()}
             disabled={carregando}
-            className="w-full rounded-lg bg-black p-3 font-semibold text-white"
+            className="w-full rounded-lg bg-black p-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             {carregando ? "Entrando..." : "Entrar"}
           </button>

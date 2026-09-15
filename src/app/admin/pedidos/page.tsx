@@ -21,11 +21,14 @@ type RetiradaPedido = {
   status: string;
 };
 
+type TipoUsuario = "admin" | "separacao";
+
 export default function AdminPedidosPage() {
   const router = useRouter();
 
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
   const [retiradas, setRetiradas] = useState<RetiradaPedido[]>([]);
+  const [tipoUsuario, setTipoUsuario] = useState<TipoUsuario | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [mensagem, setMensagem] = useState("");
 
@@ -53,10 +56,15 @@ export default function AdminPedidosPage() {
         return;
       }
 
-      if (!perfil || perfil.tipo_usuario !== "admin") {
+      if (
+        !perfil ||
+        !["admin", "separacao"].includes(perfil.tipo_usuario)
+      ) {
         router.push("/area-cliente");
         return;
       }
+
+      setTipoUsuario(perfil.tipo_usuario as TipoUsuario);
 
       const { data: pedidosData, error: pedidosError } = await supabase
         .from("pedidos")
@@ -258,7 +266,7 @@ export default function AdminPedidosPage() {
         <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
             <p className="text-sm font-semibold uppercase tracking-widest text-gray-500">
-              Operação
+              {tipoUsuario === "separacao" ? "Separação" : "Operação"}
             </p>
 
             <h1 className="mt-2 text-3xl font-bold">
@@ -270,13 +278,15 @@ export default function AdminPedidosPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => router.push("/admin/retirada/fila")}
-            className="rounded-xl bg-black px-6 py-4 text-base font-semibold text-white"
-          >
-            Abrir painel de retirada
-          </button>
+          {tipoUsuario === "admin" && (
+            <button
+              type="button"
+              onClick={() => router.push("/admin/retirada/fila")}
+              className="rounded-xl bg-black px-6 py-4 text-base font-semibold text-white"
+            >
+              Abrir painel de retirada
+            </button>
+          )}
         </div>
 
         {mensagem && (

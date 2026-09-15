@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 type Perfil = {
@@ -178,9 +179,27 @@ export default function AreaClientePage() {
   return (
     <main className="min-h-screen bg-white p-10 text-black">
       <div className="mx-auto max-w-4xl">
-        <h1 className="mb-8 text-3xl font-bold">
-          Área do cliente
-        </h1>
+        <div className="mb-8 flex items-center gap-4">
+          <button
+            type="button"
+            onClick={() => router.push("/")}
+            aria-label="Voltar para o catálogo"
+            title="Voltar para o catálogo"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-gray-300 bg-white shadow-sm transition hover:bg-gray-50"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+
+          <div>
+            <h1 className="text-3xl font-bold">
+              Área do cliente
+            </h1>
+
+            <p className="mt-1 text-sm text-gray-500">
+              Gerencie seus dados e acompanhe seus pedidos.
+            </p>
+          </div>
+        </div>
 
         <div className="grid gap-8 md:grid-cols-2">
           <div>

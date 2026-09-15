@@ -78,7 +78,10 @@ export default function AdminPedidoDetalhePage() {
       return;
     }
 
-    if (!perfil || perfil.tipo_usuario !== "admin") {
+    if (
+      !perfil ||
+      !["admin", "separacao"].includes(perfil.tipo_usuario)
+    ) {
       router.push("/area-cliente");
       return;
     }
