@@ -23,39 +23,12 @@ export async function obterDestinoPosLogin(
     return "/";
   }
 
-  if (acesso.ehAdmin) {
-    return "/admin/pedidos";
-  }
-
   /*
-   * Quem possui separação entra na área
-   * de pedidos, mesmo que também possua
-   * a capacidade de retirada.
+   * Todo usuário interno entra pela experiência
+   * operacional, e não pelo catálogo do cliente.
+   *
+   * O dashboard adapta os atalhos e indicadores
+   * conforme as capacidades do usuário.
    */
-  if (
-    acesso.podeSeparar
-  ) {
-    return "/admin/pedidos";
-  }
-
-  /*
-   * Quem possui somente retirada entra
-   * diretamente na fila operacional.
-   */
-  if (
-    acesso.podeRetirar
-  ) {
-    return "/admin/retirada/fila";
-  }
-
-  if (
-    acesso.tipoUsuario ===
-      "franqueado" ||
-    acesso.tipoUsuario ===
-      "gestor_unidade"
-  ) {
-    return "/admin/pedidos";
-  }
-
-  return "/";
+  return "/admin/dashboard";
 }
