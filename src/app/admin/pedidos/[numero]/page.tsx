@@ -4,6 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import { supabase } from "@/lib/supabase";
+import {
+  obterAcessoOperacional,
+  type AcessoOperacional,
+} from "@/lib/auth/permissoes-operacionais";
 
 type Pedido = {
   id: string;
@@ -49,6 +53,7 @@ export default function AdminPedidoDetalhePage() {
   const [pedido, setPedido] = useState<Pedido | null>(null);
   const [retiradas, setRetiradas] = useState<Retirada[]>([]);
   const [itensRetirada, setItensRetirada] = useState<ItemRetirada[]>([]);
+  const [acesso, setAcesso] = useState<AcessoOperacional | null>(null);
   const [mensagem, setMensagem] = useState("");
   const [carregando, setCarregando] = useState(true);
 
@@ -66,23 +71,34 @@ export default function AdminPedidoDetalhePage() {
       return;
     }
 
-    const { data: perfil, error: perfilError } = await supabase
-      .from("perfil_cliente")
-      .select("tipo_usuario")
-      .eq("user_id", user.id)
-      .maybeSingle();
+    try {
+      const acessoAtual = await obterAcessoOperacional(user.id);
 
-    if (perfilError) {
-      setMensagem(`Erro ao verificar acesso: ${perfilError.message}`);
+      if (!acessoAtual.ativo) {
+        await supabase.auth.signOut();
+        router.push("/login");
+        return;
+      }
+
+      if (!acessoAtual.podeAcessarPedidos) {
+        if (acessoAtual.podeAcessarFilaRetirada) {
+          router.push("/admin/retirada/fila");
+        } else {
+          router.push("/area-cliente");
+        }
+
+        return;
+      }
+
+      setAcesso(acessoAtual);
+    } catch (error) {
+      const mensagemErro =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível verificar o acesso do usuário.";
+
+      setMensagem(mensagemErro);
       setCarregando(false);
-      return;
-    }
-
-    if (
-      !perfil ||
-      !["admin", "separacao"].includes(perfil.tipo_usuario)
-    ) {
-      router.push("/area-cliente");
       return;
     }
 
@@ -266,6 +282,10 @@ export default function AdminPedidoDetalhePage() {
     );
   }
 
+  const podeOperarRetirada =
+    acesso?.podeSeparar === true ||
+    acesso?.podeRetirar === true;
+
   return (
     <main className="min-h-screen bg-white p-10 text-black">
       <div className="mx-auto max-w-5xl">
@@ -393,15 +413,17 @@ export default function AdminPedidoDetalhePage() {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      router.push(`/admin/retiradas/${retirada.id}`)
-                    }
-                    className="mt-6 w-full rounded-xl bg-black p-4 text-lg font-semibold text-white"
-                  >
-                    Operar Retirada {retirada.sequencia}
-                  </button>
+                  {podeOperarRetirada && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        router.push(`/admin/retiradas/${retirada.id}`)
+                      }
+                      className="mt-6 w-full rounded-xl bg-black p-4 text-lg font-semibold text-white"
+                    >
+                      Operar Retirada {retirada.sequencia}
+                    </button>
+                  )}
                 </div>
               );
             })}
